@@ -38,12 +38,12 @@ export function DepartmentTable({ detail }: { detail: LaborDetail }) {
 }
 
 export function EmployeeTable({ detail }: { detail: LaborDetail }) {
-  const cols = ["Employee", "Department", "Reg", "OT", "Total", "Rate", "Cost"];
+  const cols = ["Employee", "Department", "Sched", "Actual", "OT", "Rate", "Cost"];
   return (
     <Card className="card-pad">
       <SectionHeader
         title="By Employee"
-        subtitle={`${detail.byEmployee.length} people${detail.dateRange.start ? ` · ${detail.dateRange.start} → ${detail.dateRange.end}` : ""}`}
+        subtitle={`${detail.byEmployee.length} people${detail.dateRange.start ? ` · ${detail.dateRange.start} → ${detail.dateRange.end}` : ""} · scheduled = stub`}
       />
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -61,9 +61,9 @@ export function EmployeeTable({ detail }: { detail: LaborDetail }) {
               <tr key={e.employeeId ?? e.name} className="border-b border-line/70 last:border-0 hover:bg-canvas-700">
                 <td className="py-2.5 font-medium text-ink">{e.name}</td>
                 <td className="py-2.5 text-ink-2">{e.department ?? "—"}</td>
-                <td className="py-2.5 text-right tabular-nums text-ink-2">{e.regularHours.toFixed(1)}</td>
-                <td className="py-2.5 text-right tabular-nums text-ink-2">{e.otHours ? e.otHours.toFixed(1) : "—"}</td>
+                <td className="py-2.5 text-right tabular-nums text-ink-3">{e.scheduledHours.toFixed(0)}</td>
                 <td className="py-2.5 text-right font-medium tabular-nums text-ink">{e.hours.toFixed(1)}</td>
+                <td className="py-2.5 text-right tabular-nums text-ink-2">{e.otHours ? e.otHours.toFixed(1) : "—"}</td>
                 <td className="py-2.5 text-right tabular-nums text-ink-2">{e.avgRate != null ? money(e.avgRate, true) : "—"}</td>
                 <td className="py-2.5 text-right font-semibold tabular-nums text-ink">{money(e.cost)}</td>
               </tr>

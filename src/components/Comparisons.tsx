@@ -1,6 +1,6 @@
 import type { Dashboard, PeriodComparison } from "@/lib/dashboard";
 import { money, percent } from "@/lib/format";
-import { Card, SectionHeader, Delta } from "./primitives";
+import { Card, SectionHeader, Delta, Sparkline } from "./primitives";
 import { cn } from "@/lib/cn";
 import { TrendingUp, CalendarClock, ArrowUpRight, ArrowDownRight } from "lucide-react";
 
@@ -33,7 +33,7 @@ function Row({
   );
 }
 
-function Panel({ cmp, icon }: { cmp: PeriodComparison; icon: React.ReactNode }) {
+function Panel({ cmp, icon, spark, sparkLabel }: { cmp: PeriodComparison; icon: React.ReactNode; spark?: number[]; sparkLabel?: string }) {
   return (
     <div className="rounded-xl border border-line bg-canvas-700 p-4">
       <div className="mb-2 flex items-center gap-2">
@@ -64,16 +64,22 @@ function Panel({ cmp, icon }: { cmp: PeriodComparison; icon: React.ReactNode }) 
           </div>
         </div>
       </div>
+      {spark && spark.length > 1 && (
+        <div className="mt-3 border-t border-line pt-2">
+          <Sparkline data={spark} />
+          <div className="mt-0.5 text-[10px] text-ink-3">{sparkLabel ?? "trend by month"}</div>
+        </div>
+      )}
     </div>
   );
 }
 
-export function ComparisonPanels({ mom, yoy }: { mom: PeriodComparison; yoy: PeriodComparison }) {
+export function ComparisonPanels({ mom, yoy, spark, sparkLabel }: { mom: PeriodComparison; yoy: PeriodComparison; spark?: number[]; sparkLabel?: string }) {
   return (
     <div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <Panel cmp={mom} icon={<CalendarClock className="h-3.5 w-3.5" />} />
-        <Panel cmp={yoy} icon={<TrendingUp className="h-3.5 w-3.5" />} />
+        <Panel cmp={mom} icon={<CalendarClock className="h-3.5 w-3.5" />} spark={spark} sparkLabel={sparkLabel} />
+        <Panel cmp={yoy} icon={<TrendingUp className="h-3.5 w-3.5" />} spark={spark} sparkLabel={sparkLabel} />
       </div>
       <div className="mt-2 flex items-center gap-3 text-[11px] text-ink-3">
         <span className="flex items-center gap-1 text-mint"><ArrowUpRight className="h-3 w-3" /> better</span>
@@ -88,7 +94,12 @@ export function Comparisons({ data }: { data: Dashboard }) {
   return (
     <Card className="card-pad">
       <SectionHeader title="Comparisons" subtitle="Last complete month · vs prior month and prior year" />
-      <ComparisonPanels mom={data.comparisons.mom} yoy={data.comparisons.yoy} />
+      <ComparisonPanels
+        mom={data.comparisons.mom}
+        yoy={data.comparisons.yoy}
+        spark={data.weekly.filter((w) => w.total != null).map((w) => w.total!)}
+        sparkLabel="weekly revenue trend"
+      />
       <p className="mt-3 text-[11px] text-ink-3">
         Comparisons computed from weekly revenue & labor (2026 vs 2025).
       </p>

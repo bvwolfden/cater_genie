@@ -249,3 +249,30 @@ export function LaborTrendChart({
     </ResponsiveContainer>
   );
 }
+
+// --- Forward capacity vs demand (next ~6 weeks) -----------------------------
+export function CapacityChart({ data }: { data: { week: string; capacity: number; demand: number }[] }) {
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid stroke={GRID} vertical={false} />
+        <XAxis dataKey="week" tickFormatter={(d) => shortDate(d)} tick={AXIS} tickLine={false} axisLine={false} minTickGap={16} />
+        <YAxis tickFormatter={(v) => `${v}h`} tick={AXIS} tickLine={false} axisLine={false} width={44} />
+        <Tooltip
+          cursor={{ fill: "rgba(255,56,92,0.06)" }}
+          content={({ active, payload, label }) =>
+            active && payload?.length ? (
+              <Box>
+                <div className="mb-1 font-semibold text-ink">Week of {shortDate(label as string)}</div>
+                <div className="text-cyan">Capacity {Math.round(payload[0]?.payload.capacity)}h</div>
+                <div className="text-brand">Demand {Math.round(payload[0]?.payload.demand)}h</div>
+              </Box>
+            ) : null
+          }
+        />
+        <Bar dataKey="capacity" fill="#9fd8d6" radius={[5, 5, 0, 0]} barSize={16} isAnimationActive={false} />
+        <Bar dataKey="demand" fill={CORAL} radius={[5, 5, 0, 0]} barSize={16} isAnimationActive={false} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}

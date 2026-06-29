@@ -725,6 +725,7 @@ export interface LaborDetail {
     regularHours: number;
     otHours: number;
     hours: number;
+    scheduledHours: number; // STUB until When I Work schedule is connected
     cost: number;
     avgRate: number | null;
   }>;
@@ -757,7 +758,7 @@ export async function getLaborDetail(department?: string): Promise<LaborDetail> 
 
     const e = empMap.get(key) ?? {
       name, employeeId: r.employeeId ?? null, department: r.department ?? null,
-      regularHours: 0, otHours: 0, hours: 0, cost: 0, avgRate: null, rateSum: 0, rateN: 0,
+      regularHours: 0, otHours: 0, hours: 0, scheduledHours: 0, cost: 0, avgRate: null, rateSum: 0, rateN: 0,
     };
     e.regularHours += reg; e.otHours += ot; e.hours += reg + ot; e.cost += cost;
     if (rate != null) { e.rateSum += rate; e.rateN++; }
@@ -770,7 +771,7 @@ export async function getLaborDetail(department?: string): Promise<LaborDetail> 
   }
 
   const byEmployee = [...empMap.values()]
-    .map((e) => ({ ...e, avgRate: e.rateN ? e.rateSum / e.rateN : null }))
+    .map((e) => ({ ...e, avgRate: e.rateN ? e.rateSum / e.rateN : null, scheduledHours: Math.round(e.hours) }))
     .map(({ rateSum, rateN, ...e }) => e)
     .sort((a, b) => b.cost - a.cost);
 
@@ -799,4 +800,171 @@ export async function getLaborDetail(department?: string): Promise<LaborDetail> 
     byDepartment,
     byEmployee,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Forward planning — capacity vs demand, events, future capacity, anomalies.
+// STUB until When I Work (schedule) + Caterease/CaterTrax (bookings) connect.
+// Demand reflects that delivery is short-lead (1–2 wks) and catering is
+// predictable; weddings land on weekends, corporate delivery on weekdays.
+// ---------------------------------------------------------------------------
+export interface ForwardPlanning {
+  today: string | null;
+  demandFactor: number; // next-2wk vs recent-2wk revenue (seasonal)
+  coverage: {
+    dept: string;
+    scheduledHours: number;
+    ptoHours: number;
+    availableHours: number;
+    demandHours: number;
+    gapHours: number;
+    status: "short" | "ok" | "over";
+    recommendation: string;
+  }[];
+  events: {
+    date: string;
+    name: string;
+    line: string;
+    requiredHours: number;
+    depts: string[];
+    status: "short" | "tight" | "covered";
+    recommendation: string;
+  }[];
+  capacityWeeks: { week: string; capacity: number; demand: number }[];
+  pto: { name: string; dept: string; dates: string }[];
+  anomalies: { employee: string; dept: string; severity: "warn" | "info"; title: string; detail: string }[];
+}
+
+// Demand sensitivity by department (catering/delivery spike; cafe/sales steady).
+const DEMAND_SENSITIVE = /cater|event|artistry|delivery|cold|hot|steward/i;
+
+export async function getForwardPlanning(): Promise<ForwardPlanning> {
+  const [entries, rollups, metrics] = await Promise.all([
+    prisma.laborEntry.findMany({}),
+    prisma.weeklyRollup.findMany({ orderBy: { weekStart: "asc" } }),
+    prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
+  ]);
+
+  const today = metrics.filter((m) => n(m.netSales) != null).map((m) => iso(m.date)).slice(-1)[0] ?? null;
+
+  // Weekly baseline hours + headcount + avg rate per department (timesheet week).
+  const dept = new Map<string, { hours: number; cost: number; emps: Set<string>; rate: number; rateN: number }>();
+  const emp = new Map<string, { name: string; dept: string; hours: number; ot: number; rate: number | null; cost: number }>();
+  for (const r of entries) {
+    const d = r.department ?? "—";
+    const hrs = (n(r.regularHours) ?? 0) + (n(r.otHours) ?? 0);
+    const rate = n(r.hourlyRate);
+    const key = r.employeeId || [r.firstName, r.lastName].join(" ");
+    const dd = dept.get(d) ?? { hours: 0, cost: 0, emps: new Set<string>(), rate: 0, rateN: 0 };
+    dd.hours += hrs; dd.cost += n(r.paidTotal) ?? 0; dd.emps.add(key);
+    if (rate != null) { dd.rate += rate; dd.rateN++; }
+    dept.set(d, dd);
+    const e = emp.get(key) ?? { name: [r.firstName, r.lastName].filter(Boolean).join(" ") || key, dept: d, hours: 0, ot: 0, rate, cost: 0 };
+    e.hours += hrs; e.ot += n(r.otHours) ?? 0; e.cost += n(r.paidTotal) ?? 0;
+    emp.set(key, e);
+  }
+
+  // Seasonal demand factor: next 2 weeks (prior-year shape × YoY) vs recent 2.
+  const wk = rollups.filter((r) => iso(r.weekStart).startsWith("2026")).map((r) => ({ week: iso(r.weekStart), rev: n(r.totalRevenue) ?? 0, rev25: n(r.revenuePrev1) ?? 0 })).sort((a, b) => (a.week < b.week ? -1 : 1));
+  const actual = wk.filter((w) => w.rev > 0);
+  let yA = 0, yB = 0;
+  for (const w of actual) if (w.rev25 > 0) { yA += w.rev; yB += w.rev25; }
+  const g = yB > 0 ? yA / yB : 1;
+  const lastIdx = wk.findIndex((w) => w.week === (actual[actual.length - 1]?.week ?? ""));
+  const recent2 = actual.slice(-2).reduce((s, w) => s + w.rev, 0) || 1;
+  const next2 = wk.slice(lastIdx + 1, lastIdx + 3).reduce((s, w) => s + (w.rev25 > 0 ? w.rev25 * g : recent2 / 2), 0);
+  const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+  // Clamp: irregular weekly buckets make the raw ratio noisy.
+  const demandFactor = clamp(next2 / recent2, 0.95, 1.25);
+
+  // Stubbed PTO next week — top employee in two demand-sensitive depts.
+  const sortedEmps = [...emp.values()].sort((a, b) => b.hours - a.hours);
+  const pto: ForwardPlanning["pto"] = [];
+  const ptoByDept = new Map<string, number>();
+  for (const e of sortedEmps) {
+    if (pto.length >= 2) break;
+    if (DEMAND_SENSITIVE.test(e.dept) && !pto.some((p) => p.dept === e.dept)) {
+      pto.push({ name: e.name, dept: e.dept, dates: "next week" });
+      ptoByDept.set(e.dept, (ptoByDept.get(e.dept) ?? 0) + e.hours);
+    }
+  }
+
+  // Upcoming events (next 14 days) — stubbed bookings drive incremental demand.
+  const events: ForwardPlanning["events"] = [];
+  const eventBump = new Map<string, number>();
+  if (today) {
+    const dow = (iso2: string) => new Date(`${iso2}T00:00:00Z`).getUTCDay();
+    const addBump = (depts: string[], hrs: number) => {
+      const per = (hrs * 0.5) / depts.length; // ~half the event hours are incremental
+      for (const d of depts) eventBump.set(d, (eventBump.get(d) ?? 0) + per);
+    };
+    for (let i = 1; i <= 14 && events.length < 6; i++) {
+      const dt = addDays(today, i);
+      const day = dow(dt);
+      if (day === 6) { const depts = ["Cater Hot", "Cater Cold", "Event Staff", "Stewards"]; addBump(depts, 96); events.push({ date: dt, name: "Wedding reception", line: "Events / Catering", requiredHours: 96, depts, status: "short", recommendation: "Confirm event staff + stewards 2 days prior; add a shift" }); }
+      else if (day === 0) { const depts = ["Cater Hot", "Event Staff"]; addBump(depts, 40); events.push({ date: dt, name: "Sunday brunch catering", line: "Catering", requiredHours: 40, depts, status: "tight", recommendation: "Verify a driver for delivery" }); }
+      else if (day === 2 || day === 4) { const depts = ["Delivery", "Cater Hot"]; addBump(depts, 28); events.push({ date: dt, name: "Corporate lunch delivery", line: "Delivery", requiredHours: 28, depts, status: "tight", recommendation: "Short-lead: confirm 2 drivers by T-2 days; shift a Cafe hand if needed" }); }
+    }
+  }
+
+  // Department coverage (next 2 weeks): available labor vs ongoing + event demand.
+  const coverage: ForwardPlanning["coverage"] = [...dept.entries()]
+    .filter(([d]) => d !== "—")
+    .map(([d, v]) => {
+      const scheduledHours = v.hours * 2; // two weeks at last week's level
+      const ptoHours = ptoByDept.get(d) ?? 0;
+      const availableHours = Math.max(0, scheduledHours - ptoHours);
+      const demandHours = v.hours * 2 * demandFactor + (eventBump.get(d) ?? 0);
+      const gapHours = availableHours - demandHours;
+      const status: "short" | "ok" | "over" = gapHours < -4 ? "short" : gapHours > Math.max(8, demandHours * 0.15) ? "over" : "ok";
+      const shifts = Math.max(1, Math.ceil(Math.abs(gapHours) / 8));
+      const recommendation =
+        status === "short"
+          ? `Short ~${Math.round(Math.abs(gapHours))}h — add ~${shifts} shift${shifts > 1 ? "s" : ""}${eventBump.get(d) ? " (booked events)" : ""}${ptoByDept.get(d) ? " + cover PTO" : ""}`
+          : status === "over"
+            ? `~${Math.round(gapHours)}h slack — shift to prep or trim`
+            : "Coverage adequate";
+      return { dept: d, scheduledHours, ptoHours, availableHours, demandHours, gapHours, status, recommendation };
+    })
+    .sort((a, b) => a.gapHours - b.gapHours);
+
+  // Tie each event's status to whether its departments are short.
+  const shortDepts = new Set(coverage.filter((c) => c.status === "short").map((c) => c.dept));
+  for (const e of events) {
+    const anyShort = e.depts.some((d) => shortDepts.has(d));
+    e.status = anyShort ? "short" : e.status === "covered" ? "covered" : "tight";
+    if (anyShort) e.recommendation = `${e.depts.filter((d) => shortDepts.has(d)).join(", ")} short — pull from a lighter dept or add a shift`;
+  }
+
+  // Forward capacity vs demand — next 6 weeks (capacity dips for stubbed PTO).
+  const totalBaseline = [...dept.values()].reduce((s, v) => s + v.hours, 0);
+  const ptoTotal = [...ptoByDept.values()].reduce((s, v) => s + v, 0);
+  const eventBumpTotal = [...eventBump.values()].reduce((s, v) => s + v, 0) / 2; // per-week avg
+  const capacityWeeks: ForwardPlanning["capacityWeeks"] = [];
+  if (today && lastIdx >= 0) {
+    for (let w = 1; w <= 6; w++) {
+      const wkRow = wk[lastIdx + w];
+      const weekRev25 = wkRow?.rev25 ?? 0;
+      const factor = clamp(weekRev25 > 0 ? (weekRev25 * g) / (recent2 / 2) : demandFactor, 0.9, 1.35);
+      capacityWeeks.push({
+        week: wkRow?.week ?? addDays(today, w * 7),
+        capacity: Math.round(totalBaseline - (w === 1 ? ptoTotal : ptoTotal * 0.4)),
+        demand: Math.round(totalBaseline * factor + eventBumpTotal),
+      });
+    }
+  }
+
+  // Anomalies from the timesheet week (cross-sectional; trends need history).
+  const deptAvg = new Map<string, number>();
+  for (const [d, v] of dept) deptAvg.set(d, v.emps.size ? v.hours / v.emps.size : 0);
+  const anomalies: ForwardPlanning["anomalies"] = [];
+  for (const e of sortedEmps) {
+    const avg = deptAvg.get(e.dept) ?? 0;
+    if (e.ot > 0) anomalies.push({ employee: e.name, dept: e.dept, severity: "warn", title: "Overtime logged", detail: `${e.ot.toFixed(1)}h OT this week` });
+    else if (avg && e.hours > avg * 1.4) anomalies.push({ employee: e.name, dept: e.dept, severity: "warn", title: "High hours vs dept", detail: `${e.hours.toFixed(1)}h vs ${avg.toFixed(1)}h dept avg` });
+    else if (avg && e.hours > 0 && e.hours < avg * 0.4) anomalies.push({ employee: e.name, dept: e.dept, severity: "info", title: "Low hours vs dept", detail: `${e.hours.toFixed(1)}h vs ${avg.toFixed(1)}h dept avg` });
+  }
+  anomalies.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "warn" ? -1 : 1));
+
+  return { today, demandFactor, coverage, events, capacityWeeks, pto, anomalies: anomalies.slice(0, 8) };
 }

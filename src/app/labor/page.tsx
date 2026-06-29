@@ -1,10 +1,12 @@
-import { getLaborAnalysis, getLaborDetail } from "@/lib/dashboard";
+import { getLaborAnalysis, getLaborDetail, getForwardPlanning } from "@/lib/dashboard";
 import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
 import { DeptFilter } from "@/components/DeptFilter";
 import { RangePicker } from "@/components/RangePicker";
 import { DepartmentTable, EmployeeTable } from "@/components/LaborTables";
 import { ComparisonPanels } from "@/components/Comparisons";
+import { ForwardCoverage } from "@/components/ForwardCoverage";
+import { EmployeeAnomalies } from "@/components/EmployeeAnomalies";
 import { LaborTrendChart } from "@/components/charts";
 import { Card, SectionHeader, ChartLegend, Sparkline, Delta } from "@/components/primitives";
 import { money, percent, hours, shortDate, deltaPct } from "@/lib/format";
@@ -55,9 +57,10 @@ export default async function LaborPage({
   searchParams: Promise<{ dept?: string; from?: string; to?: string }>;
 }) {
   const { dept, from, to } = await searchParams;
-  const [a, detail] = await Promise.all([
+  const [a, detail, fp] = await Promise.all([
     getLaborAnalysis({ from, to }),
     getLaborDetail(dept),
+    getForwardPlanning(),
   ]);
 
   const weeklySpark = a.weekly.filter((w) => w.actualLabor != null).map((w) => w.actualLabor!);
@@ -97,6 +100,11 @@ export default async function LaborPage({
         />
       </div>
 
+      {/* Forward planning — capacity vs demand, events, future capacity */}
+      <div className="mt-4">
+        <ForwardCoverage fp={fp} />
+      </div>
+
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           <Card className="card-pad">
@@ -110,14 +118,19 @@ export default async function LaborPage({
 
           <Card className="card-pad">
             <SectionHeader title="Labor — Month-over-Month & Year-over-Year" subtitle="Cost, and as a % of revenue" />
-            <ComparisonPanels mom={a.comparisons.mom} yoy={a.comparisons.yoy} />
-            <p className="mt-3 text-[11px] text-ink-3">2026 vs 2025 weekly labor & revenue.</p>
+            <ComparisonPanels
+              mom={a.comparisons.mom}
+              yoy={a.comparisons.yoy}
+              spark={a.weekly.filter((w) => w.actualLabor != null).map((w) => w.actualLabor!)}
+              sparkLabel="weekly labor trend"
+            />
           </Card>
 
           <EmployeeTable detail={detail} />
         </div>
 
         <div className="space-y-4">
+          <EmployeeAnomalies anomalies={fp.anomalies} />
           <Card className="card-pad">
             <SectionHeader title="Latest Week Detail" subtitle="By department · timesheet export" />
             <DeptFilter departments={detail.departments.map((d) => d.department)} active={dept ?? "all"} />
