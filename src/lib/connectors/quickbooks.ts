@@ -1,16 +1,16 @@
 import type { Connector, ConnectorStatus, PullResult, BalanceInput } from "./types";
 import { ConnectorUnavailableError } from "./types";
+import { getValidQbo, qboApiBase, qboConfigured } from "../qbo";
 
 // QuickBooks Online — accounting. Discovery: documented REST API, OAuth 2.0.
 // For "current bank/cash balances" query the Account entity's CurrentBalance:
 //   GET {base}/v3/company/{realmId}/query?query=SELECT * FROM Account WHERE AccountType='Bank'
-// Requires OAuth access token (refresh token rotates every use).
 //
-// NOTE: confirming Online vs Desktop is still an open client question. This
-// connector implements the Online path. Username/password in env are for the
-// portal, not the API — QBO needs OAuth tokens.
+// Auth: tokens are obtained via the in-app "Connect QuickBooks" flow
+// (/api/qbo/connect → callback) and stored in IntegrationToken; getValidQbo()
+// returns a fresh access token (refreshing as needed). Env QBO_REALM_ID /
+// QBO_ACCESS_TOKEN remain as a manual fallback (e.g. OAuth Playground tokens).
 
-const BASE = process.env.QBO_BASE_URL || "https://quickbooks.api.intuit.com";
 const REALM = process.env.QBO_REALM_ID || "";
 const ACCESS = process.env.QBO_ACCESS_TOKEN || "";
 
@@ -27,32 +27,38 @@ const NAME_MAP: Array<[RegExp, BalanceInput["account"]]> = [
 
 export const quickbooksConnector: Connector = {
   status(): ConnectorStatus {
+    const appReady = qboConfigured();
+    const envTokens = Boolean(REALM && ACCESS);
     return {
       system: "QUICKBOOKS",
       label: "QuickBooks Online",
       category: "accounting",
-      configured: Boolean(REALM && ACCESS),
+      configured: appReady || envTokens,
       method: "oauth-rest",
-      readiness:
-        REALM && ACCESS
-          ? "Ready — realm + access token configured."
-          : "Confirm Online vs Desktop, register an Intuit app, then set QBO_REALM_ID + QBO_ACCESS_TOKEN (OAuth).",
+      readiness: envTokens
+        ? "Ready — manual realm + access token configured."
+        : appReady
+          ? "App configured — click Connect QuickBooks to authorize a company."
+          : "Set QBO_CLIENT_ID + QBO_CLIENT_SECRET (Intuit app), then click Connect QuickBooks.",
     };
   },
 
   async pull(date: Date): Promise<PullResult> {
-    if (!REALM || !ACCESS) {
+    const stored = await getValidQbo();
+    const realm = stored?.realmId || REALM;
+    const access = stored?.accessToken || ACCESS;
+    if (!realm || !access) {
       throw new ConnectorUnavailableError(
         "QUICKBOOKS",
-        "QuickBooks realm/access token not set. Needs Intuit OAuth (Online) — username/password alone won't authorize the API."
+        "QuickBooks not connected. Use the in-app Connect QuickBooks flow (or set QBO_REALM_ID + QBO_ACCESS_TOKEN)."
       );
     }
     const q = encodeURIComponent(
       "SELECT Name, AccountType, CurrentBalance FROM Account WHERE Active = true"
     );
-    const url = `${BASE}/v3/company/${REALM}/query?query=${q}&minorversion=73`;
+    const url = `${qboApiBase()}/v3/company/${realm}/query?query=${q}&minorversion=73`;
     const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${ACCESS}`, Accept: "application/json" },
+      headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
     });
     if (!res.ok) {
       throw new ConnectorUnavailableError(

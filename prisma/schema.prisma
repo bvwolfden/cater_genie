@@ -183,6 +183,18 @@ model SyncRun {
   @@index([source, startedAt])
 }
 
+/// OAuth tokens for connected integrations (e.g., QuickBooks Online).
+model IntegrationToken {
+  id           Int       @id @default(autoincrement())
+  provider     String    @unique // "QBO"
+  accessToken  String?
+  refreshToken String?
+  realmId      String?
+  expiresAt    DateTime?
+  meta         Json?
+  updatedAt    DateTime  @updatedAt
+}
+
 /// Cached AI insight for a given date/scope, so we don't re-bill on every load.
 model Insight {
   id        Int      @id @default(autoincrement())

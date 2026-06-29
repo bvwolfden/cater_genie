@@ -50,6 +50,14 @@ export function Sources({ data }: { data: Dashboard }) {
                 </span>
                 <p className="text-[11px] leading-snug text-ink-2">{s.readiness}</p>
               </div>
+              {s.connectHref && (
+                <a
+                  href={s.connectHref}
+                  className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand/90"
+                >
+                  Connect QuickBooks
+                </a>
+              )}
             </div>
           );
         })}

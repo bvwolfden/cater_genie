@@ -25,9 +25,9 @@ export const dynamic = "force-dynamic";
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ date?: string; from?: string; to?: string; qbo?: string }>;
 }) {
-  const { date, from, to } = await searchParams;
+  const { date, from, to, qbo } = await searchParams;
   const [data, pulse] = await Promise.all([
     getDashboard({ date, from, to }),
     getPulse(),
@@ -44,6 +44,22 @@ export default async function Page({
     <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
       <Nav />
       <Header control={<DatePicker selected={data.selectedDate} available={data.availableDates} />} />
+
+      {qbo && (
+        <div
+          className={
+            qbo === "connected"
+              ? "mt-3 rounded-xl border border-mint/40 bg-mint/10 px-4 py-2.5 text-sm font-medium text-cyan"
+              : "mt-3 rounded-xl border border-amber/40 bg-amber/10 px-4 py-2.5 text-sm font-medium text-amber"
+          }
+        >
+          {qbo === "connected"
+            ? "QuickBooks connected — account balances will pull on the next sync."
+            : qbo === "denied"
+              ? "QuickBooks authorization was cancelled."
+              : "QuickBooks connection didn't complete. Please try Connect again."}
+        </div>
+      )}
 
       <Kpis data={data} />
 

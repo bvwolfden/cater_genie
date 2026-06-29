@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "./db";
 import { connectors } from "./connectors";
 import { OPEX_PCT, FIXED_WEEKLY, STUBBED_COSTS, type CostComponent } from "./costModel";
+import { qboStatus } from "./qbo";
 import type { AccountType, SalesChannel, SourceSystem } from "@prisma/client";
 
 const n = (v: unknown): number | null =>
@@ -106,6 +107,7 @@ export interface Dashboard {
     method: string;
     configured: boolean;
     readiness: string;
+    connectHref: string | null;
     lastStatus: string | null;
     lastMessage: string | null;
     lastRunAt: string | null;
@@ -306,16 +308,27 @@ export async function getDashboard(opts?: {
   for (const r of lastRuns) {
     if (!latestRunBySource.has(r.source)) latestRunBySource.set(r.source, r);
   }
+  const qbo = await qboStatus();
   const sources = connectors.map((c) => {
     const s = c.status();
     const run = latestRunBySource.get(s.system);
+    const isQbo = s.system === "QUICKBOOKS";
+    const configured = isQbo ? qbo.connected : s.configured;
+    const readiness = isQbo
+      ? qbo.connected
+        ? `Connected — company realm ${qbo.realmId}. Account balances pull live.`
+        : qbo.configured
+          ? "App configured — click Connect to authorize your QuickBooks company."
+          : s.readiness
+      : s.readiness;
     return {
       system: s.system,
       label: s.label,
       category: s.category,
       method: s.method,
-      configured: s.configured,
-      readiness: s.readiness,
+      configured,
+      readiness,
+      connectHref: isQbo && qbo.configured && !qbo.connected ? "/api/qbo/connect" : null,
       lastStatus: run?.status ?? null,
       lastMessage: run?.message ?? null,
       lastRunAt: run ? run.startedAt.toISOString() : null,
