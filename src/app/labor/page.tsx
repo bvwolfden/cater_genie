@@ -18,6 +18,7 @@ function LaborStat({
   accent = "text-ink",
   deltaValue,
   deltaLabel,
+  prior,
   spark,
   sub,
 }: {
@@ -26,6 +27,7 @@ function LaborStat({
   accent?: string;
   deltaValue?: number | null;
   deltaLabel?: string;
+  prior?: string;
   spark?: number[];
   sub?: string;
 }) {
@@ -37,6 +39,7 @@ function LaborStat({
         {deltaValue != null ? <Delta value={deltaValue} upIsGood={false} /> : null}
         <span className="truncate text-[11px] text-ink-3">{deltaLabel ?? sub}</span>
       </div>
+      {prior && <div className="mt-0.5 text-[11px] text-ink-3">{prior}</div>}
       {spark && spark.length > 1 && (
         <div className="mt-2">
           <Sparkline data={spark} stroke="#FFB400" fill="#FFB4001f" />
@@ -67,23 +70,25 @@ export default async function LaborPage({
       <Nav />
       <Header control={<RangePicker from={a.range.from} to={a.range.to} availableDates={a.availableDates} basePath="/labor" />} />
 
-      {/* Period KPIs with frame of reference */}
+      {/* Period KPIs — compared to the SAME period last year */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <LaborStat
           label={`Labor $ · ${rangeLabel}`}
           value={money(a.range.laborCost)}
-          deltaValue={mom.labor.deltaPct}
-          deltaLabel={`vs ${mom.priorLabel}`}
+          deltaValue={deltaPct(a.range.laborCost, a.range.laborPrev)}
+          deltaLabel="vs same period 2025"
+          prior={`${money(a.range.laborPrev)} in 2025`}
           spark={weeklySpark}
         />
         <LaborStat
           label={`Labor % · ${rangeLabel}`}
           value={percent(a.range.laborPct)}
           accent={(a.range.laborPct ?? 0) >= 0.5 ? "text-rose" : (a.range.laborPct ?? 0) >= 0.35 ? "text-amber" : "text-mint"}
-          deltaValue={deltaPct(mom.laborPct.current, mom.laborPct.prior)}
-          deltaLabel={`vs ${mom.priorLabel}`}
+          deltaValue={deltaPct(a.range.laborPct, a.range.laborPctPrev)}
+          deltaLabel="vs same period 2025"
+          prior={a.range.laborPctPrev != null ? `${percent(a.range.laborPctPrev)} in 2025` : undefined}
         />
-        <LaborStat label={`Hours · ${rangeLabel}`} value={hours(a.range.hours)} sub={`${a.range.days} days`} />
+        <LaborStat label={`Hours · ${rangeLabel}`} value={hours(a.range.hours)} sub={`${a.range.weeks} weeks`} />
         <LaborStat
           label="Projected Labor · Year-end"
           value={money(a.projectedYearEndLabor)}

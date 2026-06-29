@@ -7,6 +7,7 @@ import {
   Cell,
   ComposedChart,
   Line,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -34,9 +35,29 @@ function Box({ children }: { children: React.ReactNode }) {
 export function SalesTrendChart({
   series,
 }: {
-  series: { date: string; netSales: number | null; laborCost: number | null; laborPct: number | null }[];
+  series: { date: string; netSales: number | null; laborCost: number | null; laborPct: number | null; foodPurchases?: number | null }[];
 }) {
-  const data = series.filter((d) => d.netSales != null);
+  const data = series
+    .filter((d) => d.netSales != null)
+    .map((d) => ({
+      ...d,
+      grossMargin: d.netSales! - (d.laborCost ?? 0) - (d.foodPurchases ?? 0),
+    }));
+  // Weekend bands (Sat–Sun) — sales are lumpy by day-of-week (weddings weekend,
+  // corporate delivery weekday).
+  const isWeekend = (isoDt: string) => {
+    const day = new Date(`${isoDt}T00:00:00Z`).getUTCDay();
+    return day === 0 || day === 6;
+  };
+  const weekendSpans: [string, string][] = [];
+  for (let i = 0; i < data.length; ) {
+    if (isWeekend(data[i].date)) {
+      let j = i;
+      while (j + 1 < data.length && isWeekend(data[j + 1].date)) j++;
+      weekendSpans.push([data[i].date, data[j].date]);
+      i = j + 1;
+    } else i++;
+  }
   return (
     <ResponsiveContainer width="100%" height={260}>
       <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
@@ -46,6 +67,9 @@ export function SalesTrendChart({
             <stop offset="100%" stopColor={CORAL} stopOpacity={0} />
           </linearGradient>
         </defs>
+        {weekendSpans.map(([x1, x2], i) => (
+          <ReferenceArea key={i} x1={x1} x2={x2} fill="#1f2937" fillOpacity={0.05} ifOverflow="extendDomain" />
+        ))}
         <CartesianGrid stroke={GRID} vertical={false} />
         <XAxis dataKey="date" tickFormatter={(d) => shortDate(d)} tick={AXIS} tickLine={false} axisLine={false} minTickGap={24} />
         <YAxis tickFormatter={(v) => moneyCompact(v)} tick={AXIS} tickLine={false} axisLine={false} width={52} />
@@ -56,14 +80,16 @@ export function SalesTrendChart({
               <Box>
                 <div className="mb-1 font-semibold text-ink">{shortDate(label as string)}</div>
                 <div className="text-brand">Net sales {money(payload[0]?.payload.netSales)}</div>
-                <div className="text-mint">Labor {money(payload[0]?.payload.laborCost)}</div>
+                <div className="text-amber">Labor {money(payload[0]?.payload.laborCost)}</div>
+                <div className="text-mint">Gross margin {money(payload[0]?.payload.grossMargin)}</div>
                 <div className="text-ink-2">Labor % {percent(payload[0]?.payload.laborPct)}</div>
               </Box>
             ) : null
           }
         />
         <Area type="monotone" dataKey="netSales" stroke={CORAL} strokeWidth={2.25} fill="url(#netFill)" isAnimationActive={false} />
-        <Line type="monotone" dataKey="laborCost" stroke={TEAL} strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Line type="monotone" dataKey="laborCost" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Line type="monotone" dataKey="grossMargin" stroke={TEAL} strokeWidth={2} dot={false} isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );

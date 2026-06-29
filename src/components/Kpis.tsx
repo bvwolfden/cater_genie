@@ -1,5 +1,5 @@
-import type { Dashboard, DayPoint } from "@/lib/dashboard";
-import { money, percent, hours, laborHealth, deltaPct } from "@/lib/format";
+import type { Dashboard } from "@/lib/dashboard";
+import { money, percent, hours, laborHealth, deltaPct, shortDate } from "@/lib/format";
 import { Card, Delta, Sparkline } from "./primitives";
 import { cn } from "@/lib/cn";
 import { DollarSign, Users, Banknote, CalendarRange, Utensils, Clock } from "lucide-react";
@@ -44,47 +44,45 @@ function StatCard({
 }
 
 export function Kpis({ data }: { data: Dashboard }) {
+  const w = data.weeklyKpis;
   const k = data.kpis;
-  const s = data.series;
-  const recent = (pick: (d: DayPoint) => number | null) =>
-    s.map(pick).filter((v): v is number => v != null).slice(-14);
-
-  const tone = laborHealth(k.laborPct);
+  const wkLabel = w.from && w.to ? `${shortDate(w.from)}–${shortDate(w.to)}` : "this week";
+  const tone = laborHealth(w.laborPct);
   const laborAccent = tone === "alert" ? "text-rose" : tone === "warn" ? "text-amber" : "text-mint";
   const mom = data.comparisons.mom;
 
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
       <StatCard
-        label="Net Sales · Today"
-        value={money(k.netSales)}
+        label="Net Sales · This Week"
+        value={money(w.netSales)}
         icon={<DollarSign className="h-4 w-4" />}
-        deltaValue={deltaPct(k.netSales, k.netSalesPrev)}
-        deltaLabel="vs prior day"
-        spark={recent((d) => d.netSales)}
+        deltaValue={deltaPct(w.netSales, w.netSalesPrev)}
+        deltaLabel="vs last week"
+        spark={w.spark.net}
         sparkColor="#FF385C"
       />
 
       <StatCard
-        label="Labor %"
-        value={percent(k.laborPct)}
+        label="Labor % · This Week"
+        value={percent(w.laborPct)}
         icon={<Users className="h-4 w-4" />}
         accent={laborAccent}
-        deltaValue={deltaPct(k.laborPct, k.laborPctPrev)}
-        deltaLabel="vs prior day"
+        deltaValue={deltaPct(w.laborPct, w.laborPctPrev)}
+        deltaLabel="vs last week"
         deltaUpIsGood={false}
-        spark={recent((d) => d.laborPct)}
+        spark={w.spark.laborPct}
         sparkColor="#FFB400"
       />
 
       <StatCard
-        label="Hours · Today"
-        value={hours(k.laborHours)}
+        label="Hours · This Week"
+        value={hours(w.hours)}
         icon={<Clock className="h-4 w-4" />}
-        deltaValue={deltaPct(k.laborHours, k.laborHoursPrev)}
-        deltaLabel="vs prior day"
+        deltaValue={deltaPct(w.hours, w.hoursPrev)}
+        deltaLabel="vs last week"
         deltaUpIsGood={false}
-        spark={recent((d) => d.laborHours)}
+        spark={w.spark.hours}
         sparkColor="#008489"
       />
 
@@ -94,29 +92,29 @@ export function Kpis({ data }: { data: Dashboard }) {
         icon={<CalendarRange className="h-4 w-4" />}
         deltaValue={mom.sales.deltaPct}
         deltaLabel={`vs ${mom.priorLabel}`}
-        spark={recent((d) => d.netSales)}
+        spark={w.spark.net}
         sparkColor="#FF385C"
       />
 
       <StatCard
         label="Cash Position"
-        value={money(k.cashPosition)}
+        value={money(w.cash)}
         icon={<Banknote className="h-4 w-4" />}
-        accent={k.cashPosition != null && k.cashPosition < 0 ? "text-rose" : "text-ink"}
-        deltaValue={deltaPct(k.cashPosition, k.cashPositionPrev)}
-        deltaLabel="vs prior snapshot"
-        spark={k.cashSeries.slice(-14)}
+        accent={w.cash != null && w.cash < 0 ? "text-rose" : "text-ink"}
+        deltaValue={deltaPct(w.cash, w.cashPrev)}
+        deltaLabel="vs last week"
+        spark={w.spark.cash}
         sparkColor="#00A699"
       />
 
       <StatCard
-        label="Food Purchases · Today"
-        value={money(k.foodPurchases)}
+        label="Food Purchases · This Week"
+        value={money(w.food)}
         icon={<Utensils className="h-4 w-4" />}
-        deltaValue={deltaPct(k.foodPurchases, k.foodPurchasesPrev)}
-        deltaLabel="vs prior day"
+        deltaValue={deltaPct(w.food, w.foodPrev)}
+        deltaLabel="vs last week"
         deltaUpIsGood={false}
-        spark={recent((d) => d.foodPurchases)}
+        spark={w.spark.food}
         sparkColor="#FFB400"
       />
     </div>

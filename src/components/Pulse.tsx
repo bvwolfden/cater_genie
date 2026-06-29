@@ -1,6 +1,6 @@
 import type { Pulse as PulseData } from "@/lib/dashboard";
 import { money, percent } from "@/lib/format";
-import { Card, SectionHeader } from "./primitives";
+import { Card, SectionHeader, ChartLegend } from "./primitives";
 import { PulseChart } from "./PulseChart";
 import { Activity } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -15,27 +15,9 @@ function Stat({ label, value, sub, accent = "text-ink" }: { label: string; value
   );
 }
 
-function Legend() {
-  const items = [
-    { c: "#FF385C", l: "Revenue" },
-    { c: "#FFB400", l: "Costs" },
-    { c: "#00A699", l: "Profit" },
-  ];
-  return (
-    <div className="flex items-center gap-3 text-xs text-ink-2">
-      {items.map((i) => (
-        <span key={i.l} className="flex items-center gap-1.5">
-          <span className="h-0.5 w-4 rounded" style={{ background: i.c }} />
-          {i.l}
-        </span>
-      ))}
-      <span className="text-ink-3">· solid = actual, dotted = projected</span>
-    </div>
-  );
-}
-
 export function Pulse({ pulse }: { pulse: PulseData }) {
   const a = pulse.assumptions;
+  const { ytd, projectedYearEnd: eoy } = pulse;
   return (
     <Card className="card-pad">
       <SectionHeader
@@ -47,24 +29,45 @@ export function Pulse({ pulse }: { pulse: PulseData }) {
             Pulse of the Business
           </span>
         }
-        subtitle="Cumulative revenue, cost & profit — actual to date, projected to year-end"
-        right={<Legend />}
+        subtitle="Cumulative revenue, cost & profit — actual + seasonal projection vs last year"
+        right={
+          <ChartLegend
+            items={[
+              { color: "#FF385C", label: "Revenue" },
+              { color: "#FFB400", label: "Costs" },
+              { color: "#00A699", label: "Profit" },
+              { color: "#B0B0B0", label: "2025" },
+            ]}
+            note="solid = actual, dotted = projected"
+          />
+        }
       />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Revenue · YTD" value={money(pulse.ytd.revenue)} sub={pulse.ytd.throughWeek ? `through ${pulse.ytd.throughWeek}` : undefined} />
-        <Stat label="Profit · YTD" value={money(pulse.ytd.profit)} accent={pulse.ytd.profit >= 0 ? "text-mint" : "text-rose"} sub={`${percent(pulse.ytd.marginPct)} margin`} />
-        <Stat label="Proj. Revenue · Year-end" value={money(pulse.projectedYearEnd.revenue)} accent="text-ink-2" />
-        <Stat label="Proj. Profit · Year-end" value={money(pulse.projectedYearEnd.profit)} accent={pulse.projectedYearEnd.profit >= 0 ? "text-mint" : "text-rose"} sub={`${percent(pulse.projectedYearEnd.marginPct)} margin`} />
+        <Stat label="Revenue · YTD" value={money(ytd.revenue)} sub={ytd.throughWeek ? `through ${ytd.throughWeek}` : undefined} />
+        <Stat label="Gross Margin · YTD" value={money(ytd.grossProfit)} sub={`${percent(ytd.grossMarginPct)} of revenue`} accent="text-ink" />
+        <Stat label="Net Profit · YTD" value={money(ytd.profit)} accent={ytd.profit >= 0 ? "text-mint" : "text-rose"} sub={`${percent(ytd.marginPct)} net margin`} />
+        <Stat label="Proj. Net Profit · Year-end" value={money(eoy.profit)} accent={eoy.profit >= 0 ? "text-mint" : "text-rose"} sub={`on ${money(eoy.revenue)} revenue`} />
       </div>
 
-      <PulseChart points={pulse.points} boundary={pulse.ytd.throughWeek} />
+      <PulseChart points={pulse.points} boundary={ytd.throughWeek} />
 
-      <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
-        Projection assumes <span className="font-medium text-ink-2">{percent(a.weeklyGrowthPct, 2)}/wk growth</span> (from recent run-rate),
-        labor at <span className="font-medium text-ink-2">{percent(a.laborPct)}</span>, food at <span className="font-medium text-ink-2">{percent(a.foodPct)}</span>,
-        and <span className="font-medium text-ink-2">{percent(a.overheadPct)}</span> overhead (gas/utilities/other) of revenue. These are tunable inputs.
-      </p>
+      <div className="mt-3 space-y-2 text-[11px] leading-relaxed text-ink-3">
+        <p>
+          <span className="font-medium text-ink-2">Seasonal projection:</span> the rest of the year follows{" "}
+          <span className="font-medium text-ink-2">2025&apos;s weekly pattern</span> scaled to 2026&apos;s pace
+          (<span className="font-medium text-ink-2">{percent(a.yoyGrowthPct, 1)} YoY</span>) — not a straight line. The gray line is last year for reference.
+          Gross margin = revenue − labor (<span className="font-medium text-ink-2">{percent(a.laborPct)}</span>) − food (<span className="font-medium text-ink-2">{percent(a.foodPct)}</span>).
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-ink-2">Net profit also subtracts (stubbed until connected):</span>
+          {pulse.stubbedCosts.map((c) => (
+            <span key={c.key} className="pill border border-amber/30 bg-amber/10 text-[10px] text-amber">
+              {c.label.split(" (")[0]} · {c.basis} · STUB
+            </span>
+          ))}
+        </div>
+      </div>
     </Card>
   );
 }

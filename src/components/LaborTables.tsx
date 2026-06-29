@@ -25,6 +25,14 @@ export function DepartmentTable({ detail }: { detail: LaborDetail }) {
         ))}
         {detail.byDepartment.length === 0 && <div className="py-6 text-center text-sm text-ink-3">No labor data.</div>}
       </div>
+      {detail.byDepartment.length > 0 && (
+        <div className="mt-3 flex items-center justify-between border-t border-line pt-2.5 text-sm">
+          <span className="font-semibold text-ink">Total</span>
+          <span className="font-semibold tabular-nums text-ink">
+            {money(detail.totals.cost)} · {detail.totals.hours.toFixed(1)}h · {detail.totals.headcount} ppl
+          </span>
+        </div>
+      )}
     </Card>
   );
 }

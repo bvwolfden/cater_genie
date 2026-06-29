@@ -10,7 +10,6 @@ import { Sources } from "@/components/Sources";
 import { DailyLedger } from "@/components/DailyLedger";
 import { Comparisons } from "@/components/Comparisons";
 import { Pulse } from "@/components/Pulse";
-import { Partners } from "@/components/Partners";
 import { InsightsPanel } from "@/components/InsightsPanel";
 import { Card, SectionHeader, ChartLegend } from "@/components/primitives";
 import { money, percent, shortDate } from "@/lib/format";
@@ -48,10 +47,9 @@ export default async function Page({
 
       <Kpis data={data} />
 
-      {/* Hero: pulse of the business + partner distributions */}
-      <div className="mt-4 space-y-4">
+      {/* Hero: pulse of the business */}
+      <div className="mt-4">
         <Pulse pulse={pulse} />
-        <Partners pulse={pulse} />
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -63,6 +61,16 @@ export default async function Page({
               subtitle={rangeSubtitle}
               right={<RangePicker from={data.range.from} to={data.range.to} availableDates={data.availableDates} />}
             />
+            <div className="mb-2">
+              <ChartLegend
+                items={[
+                  { color: "#FF385C", label: "Net sales" },
+                  { color: "#FFB400", label: "Labor" },
+                  { color: "#00A699", label: "Gross margin" },
+                ]}
+                note="gross margin = sales − labor − food"
+              />
+            </div>
             <SalesTrendChart series={data.rangeSeries} />
           </Card>
 
@@ -89,7 +97,11 @@ export default async function Page({
             <Card className="card-pad">
               <SectionHeader
                 title="Revenue by Business Line"
-                subtitle="Actual vs plan · recent weeks"
+                subtitle={
+                  data.channelMixRange.from && data.channelMixRange.to
+                    ? `Actual vs plan · ${data.channelMixRange.weeks} weeks (${shortDate(data.channelMixRange.from)} – ${shortDate(data.channelMixRange.to)})`
+                    : "Actual vs plan"
+                }
                 right={<ChartLegend items={[{ color: "#FF385C", label: "Actual" }, { color: "#DDDDDD", label: "Plan" }]} />}
               />
               <ChannelMixChart data={data.channelMix} />

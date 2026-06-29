@@ -48,6 +48,8 @@ export function PulseChart({ points, boundary }: { points: PulsePoint[]; boundar
             );
           }}
         />
+        {/* Prior-year (2025) cumulative revenue — history reference */}
+        <Line type="monotone" dataKey="priorYearRevenue" stroke="#B0B0B0" strokeWidth={1.5} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
         {/* Actual (solid) cumulative lines */}
         <Line type="monotone" dataKey="actualRevenue" stroke={REV} strokeWidth={2.5} dot={false} isAnimationActive={false} connectNulls={false} />
         <Line type="monotone" dataKey="actualCost" stroke={COST} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
