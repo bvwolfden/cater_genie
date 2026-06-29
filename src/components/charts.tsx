@@ -6,6 +6,7 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
+  LabelList,
   Line,
   ReferenceArea,
   ReferenceLine,
@@ -22,6 +23,20 @@ const GRID = "#EBEBEB";
 const CORAL = "#FF385C";
 const TEAL = "#00A699";
 const GOLD = "#FFB400";
+
+// Renders a series name at the far-right (last) point of a line/area.
+const endLabel = (text: string, color: string, lastIndex: number) =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function EndLabel(props: any) {
+    if (props.index !== lastIndex) return null;
+    const x = Number(props.x), y = Number(props.y);
+    if (!isFinite(x) || !isFinite(y)) return null;
+    return (
+      <text x={x + 6} y={y} fill={color} fontSize={11} fontWeight={600} dominantBaseline="middle">
+        {text}
+      </text>
+    );
+  };
 
 function Box({ children }: { children: React.ReactNode }) {
   return (
@@ -58,9 +73,10 @@ export function SalesTrendChart({
       i = j + 1;
     } else i++;
   }
+  const last = data.length - 1;
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+      <ComposedChart data={data} margin={{ top: 8, right: 72, bottom: 0, left: 0 }}>
         <defs>
           <linearGradient id="netFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={CORAL} stopOpacity={0.28} />
@@ -87,20 +103,26 @@ export function SalesTrendChart({
             ) : null
           }
         />
-        <Area type="monotone" dataKey="netSales" stroke={CORAL} strokeWidth={2.25} fill="url(#netFill)" isAnimationActive={false} />
-        <Line type="monotone" dataKey="laborCost" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false} />
-        <Line type="monotone" dataKey="grossMargin" stroke={TEAL} strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Area type="monotone" dataKey="netSales" stroke={CORAL} strokeWidth={2.25} fill="url(#netFill)" isAnimationActive={false}>
+          <LabelList content={endLabel("Net sales", CORAL, last)} />
+        </Area>
+        <Line type="monotone" dataKey="laborCost" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false}>
+          <LabelList content={endLabel("Labor", GOLD, last)} />
+        </Line>
+        <Line type="monotone" dataKey="grossMargin" stroke={TEAL} strokeWidth={2} dot={false} isAnimationActive={false}>
+          <LabelList content={endLabel("Gross margin", TEAL, last)} />
+        </Line>
       </ComposedChart>
     </ResponsiveContainer>
   );
 }
 
 // --- Labor by department -----------------------------------------------------
-export function LaborDeptChart({ data }: { data: { department: string; cost: number; hours: number }[] }) {
+export function LaborDeptChart({ data }: { data: { department: string; cost: number; hours: number; headcount?: number }[] }) {
   const rows = data.slice(0, 8);
   return (
     <ResponsiveContainer width="100%" height={Math.max(180, rows.length * 34)}>
-      <ComposedChart data={rows} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+      <ComposedChart data={rows} layout="vertical" margin={{ top: 4, right: 64, bottom: 4, left: 8 }}>
         <CartesianGrid stroke={GRID} horizontal={false} />
         <XAxis type="number" tickFormatter={(v) => moneyCompact(v)} tick={AXIS} tickLine={false} axisLine={false} />
         <YAxis type="category" dataKey="department" tick={AXIS} tickLine={false} axisLine={false} width={86} />
@@ -111,7 +133,7 @@ export function LaborDeptChart({ data }: { data: { department: string; cost: num
               <Box>
                 <div className="font-semibold text-ink">{payload[0]?.payload.department}</div>
                 <div className="text-brand">{money(payload[0]?.payload.cost)}</div>
-                <div className="text-ink-2">{payload[0]?.payload.hours.toFixed(1)} h</div>
+                <div className="text-ink-2">{payload[0]?.payload.hours.toFixed(1)} h · {payload[0]?.payload.headcount ?? 0} ppl</div>
               </Box>
             ) : null
           }
@@ -120,6 +142,7 @@ export function LaborDeptChart({ data }: { data: { department: string; cost: num
           {rows.map((_, i) => (
             <Cell key={i} fill={`hsl(347, 92%, ${62 + i * 3}%)`} />
           ))}
+          <LabelList dataKey="headcount" position="right" formatter={(v: unknown) => `${String(v)} ppl`} style={{ fill: "#717171", fontSize: 11 }} />
         </Bar>
       </ComposedChart>
     </ResponsiveContainer>

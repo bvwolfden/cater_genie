@@ -38,6 +38,7 @@ function StatCard({
       </div>
       <div className="mt-2">
         <Sparkline data={spark} stroke={sparkColor} fill={`${sparkColor}1f`} />
+        <div className="mt-0.5 text-[10px] text-ink-3">weekly · last 8 wks</div>
       </div>
     </Card>
   );

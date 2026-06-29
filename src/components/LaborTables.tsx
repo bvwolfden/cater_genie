@@ -8,7 +8,7 @@ export function DepartmentTable({ detail }: { detail: LaborDetail }) {
   const peak = maxCost(detail.byDepartment);
   return (
     <Card className="card-pad">
-      <SectionHeader title="By Department" subtitle="Hours & paid cost" />
+      <SectionHeader title="By Department" subtitle={detail.dateRange.start ? `Hours & paid cost · ${detail.dateRange.start} → ${detail.dateRange.end}` : "Hours & paid cost"} />
       <div className="space-y-2.5">
         {detail.byDepartment.map((d) => (
           <div key={d.department}>

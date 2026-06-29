@@ -82,13 +82,14 @@ export interface Dashboard {
     monthLabel: string | null;
   };
   weeklyKpis: WeeklyKpis;
+  forwardDays: DayPoint[];
   balances: Array<{
     account: AccountType;
     balance: number;
     prev: number | null;
     date: string;
   }>;
-  laborByDept: Array<{ department: string; hours: number; cost: number }>;
+  laborByDept: Array<{ department: string; hours: number; cost: number; headcount: number }>;
   channelMix: Array<{ channel: SalesChannel; actual: number; projected: number }>;
   channelMixRange: { from: string | null; to: string | null; weeks: number };
   weekly: Array<{
@@ -165,7 +166,7 @@ export async function getDashboard(opts?: {
   to?: string;
 }): Promise<Dashboard> {
   const targetDate = opts?.date;
-  const [metrics, balanceRows, deptGroups, channelRows, rollupRows] =
+  const [metrics, balanceRows, deptGroups, channelRows, rollupRows, deptEmp] =
     await Promise.all([
       prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
       prisma.accountBalance.findMany({ orderBy: { date: "asc" } }),
@@ -175,7 +176,10 @@ export async function getDashboard(opts?: {
       }),
       prisma.weeklyChannelRevenue.findMany({ orderBy: { weekStart: "asc" } }),
       prisma.weeklyRollup.findMany({ orderBy: { weekStart: "asc" } }),
+      prisma.laborEntry.groupBy({ by: ["department", "employeeId"] }),
     ]);
+  const deptHeadcount = new Map<string, number>();
+  for (const r of deptEmp) if (r.department) deptHeadcount.set(r.department, (deptHeadcount.get(r.department) ?? 0) + 1);
 
   const series: DayPoint[] = metrics.map((m) => ({
     date: iso(m.date),
@@ -264,6 +268,7 @@ export async function getDashboard(opts?: {
       department: g.department as string,
       hours: (n(g._sum.regularHours) ?? 0) + (n(g._sum.otHours) ?? 0),
       cost: n(g._sum.paidTotal) ?? 0,
+      headcount: deptHeadcount.get(g.department as string) ?? 0,
     }))
     .sort((a, b) => b.cost - a.cost);
 
@@ -393,6 +398,30 @@ export async function getDashboard(opts?: {
     weeklyKpis = { from: null, to: null, netSales: 0, netSalesPrev: 0, laborCost: 0, laborPct: null, laborPctPrev: null, hours: 0, hoursPrev: 0, food: 0, foodPrev: 0, cash: null, cashPrev: null, spark: { net: [], laborPct: [], hours: [], food: [], cash: [] } };
   }
 
+  // --- Forward Daily Ledger: project next 10 days from weekday seasonality --
+  const forwardDays: DayPoint[] = [];
+  if (latestDate) {
+    const lookback = addDays(latestDate, -27);
+    const recentDays = series.filter((d) => d.date > lookback && d.date <= latestDate && d.netSales != null);
+    const byDow = new Map<number, number[]>();
+    for (const d of recentDays) {
+      const dow = new Date(`${d.date}T00:00:00Z`).getUTCDay();
+      const arr = byDow.get(dow);
+      if (arr) arr.push(d.netSales!);
+      else byDow.set(dow, [d.netSales!]);
+    }
+    let lp = 0, ls = 0;
+    for (const d of recentDays) if (d.laborCost != null && d.netSales) { lp += d.laborCost; ls += d.netSales; }
+    const dailyLaborPct = ls ? lp / ls : 0.2;
+    for (let i = 1; i <= 10; i++) {
+      const dt = addDays(latestDate, i);
+      const dow = new Date(`${dt}T00:00:00Z`).getUTCDay();
+      const arr = byDow.get(dow) ?? [];
+      const ns = arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+      forwardDays.push({ date: dt, netSales: ns, tax: null, laborCost: ns != null ? Math.round(ns * dailyLaborPct) : null, laborHours: null, laborPct: dailyLaborPct, foodPurchases: null });
+    }
+  }
+
   // --- MoM / YoY comparisons (from weekly rollups: has both years) ---------
   const monthly = monthlyBuckets(rollupRows);
   // Anchor MoM/YoY to the latest COMPLETE month (≥4 weeks of data) so a
@@ -449,6 +478,7 @@ export async function getDashboard(opts?: {
       monthLabel,
     },
     weeklyKpis,
+    forwardDays,
     balances,
     laborByDept,
     channelMix,

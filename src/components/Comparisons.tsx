@@ -2,7 +2,7 @@ import type { Dashboard, PeriodComparison } from "@/lib/dashboard";
 import { money, percent } from "@/lib/format";
 import { Card, SectionHeader, Delta } from "./primitives";
 import { cn } from "@/lib/cn";
-import { TrendingUp, CalendarClock } from "lucide-react";
+import { TrendingUp, CalendarClock, ArrowUpRight, ArrowDownRight } from "lucide-react";
 
 function Row({
   metric,
@@ -46,8 +46,8 @@ function Panel({ cmp, icon }: { cmp: PeriodComparison; icon: React.ReactNode }) 
         </div>
       </div>
       <div className="mb-1 flex items-center justify-end gap-3 text-[10px] uppercase tracking-wide text-ink-3">
-        <span>prior</span>
-        <span className="font-semibold text-ink-2">current</span>
+        <span>{cmp.priorLabel}</span>
+        <span className="font-semibold text-ink-2">{cmp.currentLabel}</span>
         <span className="w-16 text-right">change</span>
       </div>
       <div className="divide-y divide-line">
@@ -70,9 +70,16 @@ function Panel({ cmp, icon }: { cmp: PeriodComparison; icon: React.ReactNode }) 
 
 export function ComparisonPanels({ mom, yoy }: { mom: PeriodComparison; yoy: PeriodComparison }) {
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-      <Panel cmp={mom} icon={<CalendarClock className="h-3.5 w-3.5" />} />
-      <Panel cmp={yoy} icon={<TrendingUp className="h-3.5 w-3.5" />} />
+    <div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <Panel cmp={mom} icon={<CalendarClock className="h-3.5 w-3.5" />} />
+        <Panel cmp={yoy} icon={<TrendingUp className="h-3.5 w-3.5" />} />
+      </div>
+      <div className="mt-2 flex items-center gap-3 text-[11px] text-ink-3">
+        <span className="flex items-center gap-1 text-mint"><ArrowUpRight className="h-3 w-3" /> better</span>
+        <span className="flex items-center gap-1 text-rose"><ArrowDownRight className="h-3 w-3" /> worse</span>
+        <span>vs the comparison period</span>
+      </div>
     </div>
   );
 }

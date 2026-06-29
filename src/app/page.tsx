@@ -79,7 +79,7 @@ export default async function Page({
           <Card className="card-pad">
             <SectionHeader
               title="Weekly Revenue vs Prior Year & Projection"
-              subtitle="Weekly revenue, compared to last year and this year's plan"
+              subtitle="Weekly revenue · last 16 weeks · vs last year and plan"
               right={
                 <ChartLegend
                   items={[
@@ -107,7 +107,7 @@ export default async function Page({
               <ChannelMixChart data={data.channelMix} />
             </Card>
             <Card className="card-pad">
-              <SectionHeader title="Labor by Department" subtitle="Paid cost · current week" />
+              <SectionHeader title="Labor by Department" subtitle="Paid cost · latest timesheet week" />
               <LaborDeptChart data={data.laborByDept} />
             </Card>
           </div>

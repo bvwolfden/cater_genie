@@ -36,7 +36,9 @@ export function Delta({
   if (value == null) return <span className="text-xs text-ink-3">—</span>;
   const up = value >= 0;
   const good = up === upIsGood;
-  const Icon = up ? ArrowUpRight : ArrowDownRight;
+  // Arrow reflects sentiment: up/green = better, down/red = worse (consistent
+  // for cost metrics too, where a decrease is "better").
+  const Icon = good ? ArrowUpRight : ArrowDownRight;
   return (
     <span className={cn("pill", good ? "bg-mint/10 text-mint" : "bg-rose/10 text-rose")}>
       <Icon className="h-3 w-3" />
