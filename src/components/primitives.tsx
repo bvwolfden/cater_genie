@@ -15,12 +15,12 @@ export function SectionHeader({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="mb-4 flex items-start justify-between gap-3">
-      <div>
+    <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+      <div className="min-w-0">
         <h2 className="text-[15px] font-semibold tracking-tight text-ink">{title}</h2>
         {subtitle && <p className="mt-0.5 text-xs text-ink-2">{subtitle}</p>}
       </div>
-      {right}
+      {right && <div className="shrink-0">{right}</div>}
     </div>
   );
 }

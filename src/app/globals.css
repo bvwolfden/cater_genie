@@ -11,15 +11,21 @@ body {
   height: 100%;
 }
 
+html {
+  overflow-x: hidden;
+}
+
 body {
-  @apply bg-canvas-900 text-ink antialiased;
+  @apply overflow-x-hidden bg-canvas-900 text-ink antialiased;
   background-image: radial-gradient(48rem 36rem at 100% -8%, rgba(255, 56, 92, 0.05), transparent 60%);
   background-attachment: fixed;
 }
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-line bg-white shadow-card transition-shadow;
+    /* min-w-0 so cards holding Recharts charts can shrink in grid/flex (else they
+       force horizontal overflow on mobile). */
+    @apply min-w-0 rounded-2xl border border-line bg-white shadow-card transition-shadow;
   }
   .card:hover {
     @apply shadow-cardHover;

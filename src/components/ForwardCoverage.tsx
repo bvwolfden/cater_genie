@@ -41,35 +41,27 @@ export function ForwardCoverage({ fp }: { fp: ForwardPlanning }) {
       />
       <StubBanner />
 
-      {/* Department coverage */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-line text-left">
-              <th className="stat-label pb-2">Department</th>
-              <th className="stat-label pb-2 text-right">Demand</th>
-              <th className="stat-label pb-2 text-right">Available</th>
-              <th className="stat-label pb-2 text-right">Gap</th>
-              <th className="stat-label pb-2 pl-3">Status &amp; recommendation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {fp.coverage.map((c) => (
-              <tr key={c.dept} className="border-b border-line/70 last:border-0">
-                <td className="py-2 font-medium text-ink">{c.dept}</td>
-                <td className="py-2 text-right tabular-nums text-ink-2">{Math.round(c.demandHours)}h</td>
-                <td className="py-2 text-right tabular-nums text-ink-2">{Math.round(c.availableHours)}h</td>
-                <td className={cn("py-2 text-right font-medium tabular-nums", c.gapHours < -4 ? "text-rose" : c.gapHours > 0 ? "text-mint" : "text-ink-2")}>
+      {/* Department coverage — cards (recommendation spans full width) */}
+      <div className="space-y-2">
+        {fp.coverage.map((c) => (
+          <div key={c.dept} className="rounded-xl border border-line bg-canvas-700 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-ink">{c.dept}</span>
+              <span className={cn("pill text-[10px] uppercase", STATUS[c.status])}>{c.status}</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
+              <span>Demand <b className="tabular-nums text-ink">{Math.round(c.demandHours)}h</b></span>
+              <span>Available <b className="tabular-nums text-ink">{Math.round(c.availableHours)}h</b></span>
+              <span>
+                Gap{" "}
+                <b className={cn("tabular-nums", c.gapHours < -4 ? "text-rose" : c.gapHours > 0 ? "text-mint" : "text-ink")}>
                   {c.gapHours >= 0 ? "+" : ""}{Math.round(c.gapHours)}h
-                </td>
-                <td className="py-2 pl-3">
-                  <span className={cn("pill mr-2 text-[10px] uppercase", STATUS[c.status])}>{c.status}</span>
-                  <span className="text-[12px] text-ink-2">{c.recommendation}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </b>
+              </span>
+            </div>
+            <div className="mt-1.5 text-[12px] text-ink-2">{c.recommendation}</div>
+          </div>
+        ))}
       </div>
       {fp.pto.length > 0 && (
         <p className="mt-2 text-[11px] text-ink-3">

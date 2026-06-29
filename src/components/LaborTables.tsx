@@ -45,7 +45,8 @@ export function EmployeeTable({ detail }: { detail: LaborDetail }) {
         title="By Employee"
         subtitle={`${detail.byEmployee.length} people${detail.dateRange.start ? ` · ${detail.dateRange.start} → ${detail.dateRange.end}` : ""} · scheduled = stub`}
       />
-      <div className="overflow-x-auto">
+      {/* Desktop: table */}
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-line">
@@ -70,6 +71,24 @@ export function EmployeeTable({ detail }: { detail: LaborDetail }) {
             ))}
           </tbody>
         </table>
+      </div>
+      {/* Mobile: cards (no horizontal scroll) */}
+      <div className="space-y-2 md:hidden">
+        {detail.byEmployee.map((e) => (
+          <div key={e.employeeId ?? e.name} className="rounded-xl border border-line bg-canvas-700 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-ink">{e.name}</span>
+              <span className="font-semibold tabular-nums text-ink">{money(e.cost)}</span>
+            </div>
+            <div className="text-[11px] text-ink-3">{e.department ?? "—"}</div>
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-2">
+              <span>Sched <b className="text-ink">{e.scheduledHours.toFixed(0)}h</b></span>
+              <span>Actual <b className="text-ink">{e.hours.toFixed(1)}h</b></span>
+              <span>OT <b className="text-ink">{e.otHours ? e.otHours.toFixed(1) : "—"}</b></span>
+              <span>Rate <b className="text-ink">{e.avgRate != null ? money(e.avgRate, true) : "—"}</b></span>
+            </div>
+          </div>
+        ))}
       </div>
     </Card>
   );

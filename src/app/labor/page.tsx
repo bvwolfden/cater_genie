@@ -74,7 +74,7 @@ export default async function LaborPage({
       <Header control={<RangePicker from={a.range.from} to={a.range.to} availableDates={a.availableDates} basePath="/labor" />} />
 
       {/* Period KPIs — compared to the SAME period last year */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <LaborStat
           label={`Labor $ · ${rangeLabel}`}
           value={money(a.range.laborCost)}
@@ -106,7 +106,7 @@ export default async function LaborPage({
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="space-y-4 xl:col-span-2">
+        <div className="min-w-0 space-y-4 xl:col-span-2">
           <Card className="card-pad">
             <SectionHeader
               title="Labor Cost Trend & Projection"

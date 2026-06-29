@@ -54,7 +54,7 @@ export default async function Page({
 
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
         {/* Left / main column */}
-        <div className="space-y-4 xl:col-span-2">
+        <div className="min-w-0 space-y-4 xl:col-span-2">
           <Card className="card-pad">
             <SectionHeader
               title="Daily Sales & Labor"
@@ -93,7 +93,7 @@ export default async function Page({
             <WeeklyCompChart data={data.weekly} />
           </Card>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
             <Card className="card-pad">
               <SectionHeader
                 title="Revenue by Business Line"

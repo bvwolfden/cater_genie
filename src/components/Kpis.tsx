@@ -27,8 +27,8 @@ function StatCard({
 }) {
   return (
     <Card className="card-pad animate-fade-up overflow-hidden">
-      <div className="flex items-center justify-between">
-        <span className="stat-label truncate">{label}</span>
+      <div className="flex items-center justify-between gap-1">
+        <span className="stat-label min-w-0 flex-1 truncate">{label}</span>
         <span className="shrink-0 text-ink-3">{icon}</span>
       </div>
       <div className={cn("mt-2 text-2xl font-semibold tracking-tight tabular-nums", accent)}>{value}</div>
@@ -53,7 +53,7 @@ export function Kpis({ data }: { data: Dashboard }) {
   const mom = data.comparisons.mom;
 
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
       <StatCard
         label="Net Sales · This Week"
         value={money(w.netSales)}
