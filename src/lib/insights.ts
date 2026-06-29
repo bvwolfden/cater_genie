@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "./db";
 import type { Dashboard } from "./dashboard";
 import { money, percent } from "./format";
+import { channelLabelOf } from "./labels";
 
 export type AlertSeverity = "info" | "warn" | "alert";
 
@@ -41,8 +42,8 @@ function buildContext(d: Dashboard) {
     cashPosition: k.cashPosition,
     balances: d.balances.map((b) => ({ account: b.account, balance: b.balance })),
     laborByDept: d.laborByDept.slice(0, 6),
-    channelMix: d.channelMix.map((c) => ({
-      channel: c.channel,
+    revenueByBusiness: d.channelMix.map((c) => ({
+      business: channelLabelOf(c.channel),
       actual: Math.round(c.actual),
       projected: Math.round(c.projected),
     })),
@@ -103,7 +104,7 @@ function rulesEngine(d: Dashboard): InsightResult {
     `**${k.monthLabel ?? "Month"} to date.** ${money(k.mtdNetSales)} net sales, avg ${money(k.mtdAvgDailySales)}/day, blended labor ${percent(k.mtdLaborPct)}.`,
     best ? `**Best day in range.** ${money(best.netSales)} on ${best.date}.` : "",
     d.channelMix.length
-      ? `**Channel mix (recent).** ${d.channelMix.map((c) => `${c.channel.replace("_", " ").toLowerCase()} ${money(c.actual)}`).join(", ")}.`
+      ? `**Revenue by business (recent).** ${d.channelMix.map((c) => `${channelLabelOf(c.channel)} ${money(c.actual)}`).join(", ")}.`
       : "",
   ]
     .filter(Boolean)
@@ -168,17 +169,22 @@ async function llmInsight(d: Dashboard): Promise<InsightResult> {
 
 /** Get insight for the latest day, using cache unless `force`. */
 export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): Promise<InsightResult> {
-  const scopeDate = d.latestDate ? new Date(`${d.latestDate}T00:00:00Z`) : null;
+  const scopeISO = d.selectedDate ?? d.latestDate;
+  const scopeDate = scopeISO ? new Date(`${scopeISO}T00:00:00Z`) : null;
+  const k = d.kpis;
+  // Signature so the cache auto-invalidates when the day's numbers change.
+  const sig = `${scopeISO}|${Math.round(k.netSales ?? 0)}|${Math.round(k.laborCost ?? 0)}|${Math.round(k.cashPosition ?? 0)}`;
 
   if (scopeDate && !opts.force) {
     const cached = await prisma.insight.findUnique({
       where: { scopeDate_scope: { scopeDate, scope: "daily" } },
     });
-    if (cached?.body) {
+    const payload = (cached?.payload as { alerts?: InsightResult["alerts"]; sig?: string } | null) ?? null;
+    if (cached?.body && payload?.sig === sig) {
       return {
         headline: cached.headline || "Daily insights",
         body: cached.body,
-        alerts: (cached.payload as InsightResult["alerts"]) ?? [],
+        alerts: payload.alerts ?? [],
         model: cached.model || "cache",
         generatedAt: cached.createdAt.toISOString(),
         cached: true,
@@ -205,13 +211,13 @@ export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): 
         scope: "daily",
         headline: result.headline,
         body: result.body,
-        payload: result.alerts as unknown as object,
+        payload: { alerts: result.alerts, sig } as unknown as object,
         model: result.model,
       },
       update: {
         headline: result.headline,
         body: result.body,
-        payload: result.alerts as unknown as object,
+        payload: { alerts: result.alerts, sig } as unknown as object,
         model: result.model,
         createdAt: new Date(),
       },

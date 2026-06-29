@@ -1,14 +1,19 @@
-import { getDashboard } from "@/lib/dashboard";
+import { getDashboard, getPulse } from "@/lib/dashboard";
 import { getInsight } from "@/lib/insights";
 import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
 import { DatePicker } from "@/components/DatePicker";
+import { RangePicker } from "@/components/RangePicker";
 import { Kpis } from "@/components/Kpis";
 import { Balances } from "@/components/Balances";
 import { Sources } from "@/components/Sources";
 import { DailyLedger } from "@/components/DailyLedger";
+import { Comparisons } from "@/components/Comparisons";
+import { Pulse } from "@/components/Pulse";
+import { Partners } from "@/components/Partners";
 import { InsightsPanel } from "@/components/InsightsPanel";
-import { Card, SectionHeader } from "@/components/primitives";
+import { Card, SectionHeader, ChartLegend } from "@/components/primitives";
+import { money, percent, shortDate } from "@/lib/format";
 import {
   SalesTrendChart,
   LaborDeptChart,
@@ -21,11 +26,20 @@ export const dynamic = "force-dynamic";
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string }>;
+  searchParams: Promise<{ date?: string; from?: string; to?: string }>;
 }) {
-  const { date } = await searchParams;
-  const data = await getDashboard(date);
+  const { date, from, to } = await searchParams;
+  const [data, pulse] = await Promise.all([
+    getDashboard({ date, from, to }),
+    getPulse(),
+  ]);
   const insight = await getInsight(data);
+
+  const r = data.range;
+  const rangeSubtitle =
+    r.from && r.to
+      ? `${shortDate(r.from)} – ${shortDate(r.to)} · ${money(r.netSales)} sales · ${money(r.laborCost)} labor · ${percent(r.laborPct)} labor`
+      : "Net sales (area) vs labor cost (line)";
 
   return (
     <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
@@ -34,28 +48,50 @@ export default async function Page({
 
       <Kpis data={data} />
 
+      {/* Hero: pulse of the business + partner distributions */}
+      <div className="mt-4 space-y-4">
+        <Pulse pulse={pulse} />
+        <Partners pulse={pulse} />
+      </div>
+
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
         {/* Left / main column */}
         <div className="space-y-4 xl:col-span-2">
           <Card className="card-pad">
             <SectionHeader
               title="Daily Sales & Labor"
-              subtitle="Net sales (area) vs labor cost (line) — last 30 days"
+              subtitle={rangeSubtitle}
+              right={<RangePicker from={data.range.from} to={data.range.to} availableDates={data.availableDates} />}
             />
-            <SalesTrendChart series={data.series} />
+            <SalesTrendChart series={data.rangeSeries} />
           </Card>
+
+          <Comparisons data={data} />
 
           <Card className="card-pad">
             <SectionHeader
               title="Weekly Revenue vs Prior Year & Projection"
-              subtitle="Bars: 2026 revenue · dashed: prior year · gold: projection"
+              subtitle="Weekly revenue, compared to last year and this year's plan"
+              right={
+                <ChartLegend
+                  items={[
+                    { color: "#FF385C", label: "2026 revenue" },
+                    { color: "#A6A6A6", label: "Prior year" },
+                    { color: "#FFB400", label: "Projection" },
+                  ]}
+                />
+              }
             />
             <WeeklyCompChart data={data.weekly} />
           </Card>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card className="card-pad">
-              <SectionHeader title="Channel Mix" subtitle="Actual vs projected · recent weeks" />
+              <SectionHeader
+                title="Revenue by Business Line"
+                subtitle="Actual vs plan · recent weeks"
+                right={<ChartLegend items={[{ color: "#FF385C", label: "Actual" }, { color: "#DDDDDD", label: "Plan" }]} />}
+              />
               <ChannelMixChart data={data.channelMix} />
             </Card>
             <Card className="card-pad">

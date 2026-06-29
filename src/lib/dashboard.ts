@@ -7,6 +7,15 @@ const n = (v: unknown): number | null =>
   v == null ? null : Number(v as never);
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
+export interface PeriodComparison {
+  label: string;
+  currentLabel: string;
+  priorLabel: string;
+  sales: { current: number | null; prior: number | null; deltaPct: number | null };
+  labor: { current: number | null; prior: number | null; deltaPct: number | null };
+  laborPct: { current: number | null; prior: number | null };
+}
+
 export interface DayPoint {
   date: string;
   netSales: number | null;
@@ -23,6 +32,17 @@ export interface Dashboard {
   selectedDate: string | null;
   availableDates: string[];
   series: DayPoint[];
+  range: {
+    from: string | null;
+    to: string | null;
+    netSales: number;
+    laborCost: number;
+    laborPct: number | null;
+    hours: number;
+    days: number;
+  };
+  rangeSeries: DayPoint[];
+  comparisons: { mom: PeriodComparison; yoy: PeriodComparison };
   kpis: {
     netSales: number | null;
     netSalesPrev: number | null;
@@ -36,6 +56,11 @@ export interface Dashboard {
     mtdAvgDailySales: number | null;
     mtdHours: number | null;
     cashPosition: number | null;
+    cashPositionPrev: number | null;
+    cashSeries: number[];
+    laborPctPrev: number | null;
+    laborHoursPrev: number | null;
+    foodPurchasesPrev: number | null;
     monthLabel: string | null;
   };
   balances: Array<{
@@ -66,7 +91,28 @@ export interface Dashboard {
   }>;
 }
 
-export async function getDashboard(targetDate?: string): Promise<Dashboard> {
+const addDays = (iso: string, days: number) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+const ymLabel = (ym: string) =>
+  new Date(`${ym}-01T00:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+const prevYm = (ym: string) => {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  d.setUTCMonth(d.getUTCMonth() - 1);
+  return d.toISOString().slice(0, 7);
+};
+const pctChange = (cur: number | null, prior: number | null) =>
+  cur == null || prior == null || prior === 0 ? null : (cur - prior) / Math.abs(prior);
+
+export async function getDashboard(opts?: {
+  date?: string;
+  from?: string;
+  to?: string;
+}): Promise<Dashboard> {
+  const targetDate = opts?.date;
   const [metrics, balanceRows, deptGroups, channelRows, rollupRows] =
     await Promise.all([
       prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
@@ -143,6 +189,22 @@ export async function getDashboard(targetDate?: string): Promise<Dashboard> {
     date: list[list.length - 1].date,
   }));
   const cashPosition = balances.reduce((s, b) => s + b.balance, 0);
+  const cashPositionPrev = balances.reduce((s, b) => s + (b.prev ?? b.balance), 0);
+  const cashDates = [
+    ...new Set(balanceRows.filter((b) => !selectedDate || iso(b.date) <= selectedDate).map((b) => iso(b.date))),
+  ].sort();
+  const cashSeries = cashDates.map((dt) => {
+    let sum = 0;
+    for (const [, list] of byAccount) {
+      let v: number | null = null;
+      for (const e of list) {
+        if (e.date <= dt) v = e.balance;
+        else break;
+      }
+      if (v != null) sum += v;
+    }
+    return sum;
+  });
 
   const laborByDept = deptGroups
     .filter((g) => g.department)
@@ -203,12 +265,71 @@ export async function getDashboard(targetDate?: string): Promise<Dashboard> {
     };
   });
 
+  // --- Date range (sales & labor) -----------------------------------------
+  let rangeTo = opts?.to || selectedDate || latestDate;
+  let rangeFrom = opts?.from || (rangeTo ? addDays(rangeTo, -29) : null);
+  if (rangeFrom && rangeTo && rangeFrom > rangeTo) [rangeFrom, rangeTo] = [rangeTo, rangeFrom];
+  const rangeSeries = series.filter(
+    (d) => (!rangeFrom || d.date >= rangeFrom) && (!rangeTo || d.date <= rangeTo)
+  );
+  const rNet = rangeSeries.reduce((s, d) => s + (d.netSales ?? 0), 0);
+  const rLabor = rangeSeries.reduce((s, d) => s + (d.laborCost ?? 0), 0);
+  const rHours = rangeSeries.reduce((s, d) => s + (d.laborHours ?? 0), 0);
+  const rDays = rangeSeries.filter((d) => d.netSales != null).length;
+  const range = {
+    from: rangeFrom,
+    to: rangeTo,
+    netSales: rNet,
+    laborCost: rLabor,
+    laborPct: rNet ? rLabor / rNet : null,
+    hours: rHours,
+    days: rDays,
+  };
+
+  // --- MoM / YoY comparisons (from weekly rollups: has both years) ---------
+  const monthly = new Map<string, { s26: number; s25: number; l26: number }>();
+  for (const r of rollupRows) {
+    const ym = iso(r.weekStart).slice(0, 7);
+    const m = monthly.get(ym) ?? { s26: 0, s25: 0, l26: 0 };
+    m.s26 += n(r.totalRevenue) ?? 0;
+    m.s25 += n(r.revenuePrev1) ?? 0;
+    m.l26 += n(r.laborCost) ?? 0;
+    monthly.set(ym, m);
+  }
+  const monthKeys = [...monthly.keys()].sort();
+  let selYm = (selectedDate ?? latestDate ?? "").slice(0, 7);
+  if (!monthly.has(selYm) && monthKeys.length) selYm = monthKeys[monthKeys.length - 1];
+  const prevKey = prevYm(selYm);
+  const curMonth = monthly.get(selYm) ?? { s26: 0, s25: 0, l26: 0 };
+  const prevMonth = monthly.get(prevKey) ?? { s26: 0, s25: 0, l26: 0 };
+
+  const mom: PeriodComparison = {
+    label: "Month over Month",
+    currentLabel: ymLabel(selYm),
+    priorLabel: ymLabel(prevKey),
+    sales: { current: curMonth.s26 || null, prior: prevMonth.s26 || null, deltaPct: pctChange(curMonth.s26 || null, prevMonth.s26 || null) },
+    labor: { current: curMonth.l26 || null, prior: prevMonth.l26 || null, deltaPct: pctChange(curMonth.l26 || null, prevMonth.l26 || null) },
+    laborPct: { current: curMonth.s26 ? curMonth.l26 / curMonth.s26 : null, prior: prevMonth.s26 ? prevMonth.l26 / prevMonth.s26 : null },
+  };
+  const yoy: PeriodComparison = {
+    label: "Year over Year",
+    currentLabel: ymLabel(selYm),
+    priorLabel: `${Number(selYm.slice(0, 4)) - 1}`,
+    sales: { current: curMonth.s26 || null, prior: curMonth.s25 || null, deltaPct: pctChange(curMonth.s26 || null, curMonth.s25 || null) },
+    // Prior-year labor $ isn't in the current seed; surfaced as unavailable.
+    labor: { current: curMonth.l26 || null, prior: null, deltaPct: null },
+    laborPct: { current: curMonth.s26 ? curMonth.l26 / curMonth.s26 : null, prior: null },
+  };
+
   return {
     generatedAt: new Date().toISOString(),
     latestDate,
     selectedDate,
     availableDates,
     series,
+    range,
+    rangeSeries,
+    comparisons: { mom, yoy },
     kpis: {
       netSales: latest?.netSales ?? null,
       netSalesPrev: prev?.netSales ?? null,
@@ -222,6 +343,11 @@ export async function getDashboard(targetDate?: string): Promise<Dashboard> {
       mtdAvgDailySales: mtd.count ? mtd.net / mtd.count : null,
       mtdHours: mtd.count ? mtd.hours : null,
       cashPosition: balances.length ? cashPosition : null,
+      cashPositionPrev: balances.length ? cashPositionPrev : null,
+      cashSeries,
+      laborPctPrev: prev?.laborPct ?? null,
+      laborHoursPrev: prev?.laborHours ?? null,
+      foodPurchasesPrev: prev?.foodPurchases ?? null,
       monthLabel,
     },
     balances,
@@ -229,6 +355,117 @@ export async function getDashboard(targetDate?: string): Promise<Dashboard> {
     channelMix,
     weekly,
     sources,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// "Pulse of the business" — revenue / cost / profit to date + projection
+// ---------------------------------------------------------------------------
+export interface PulsePoint {
+  week: string;
+  actualRevenue: number | null;
+  actualCost: number | null;
+  actualProfit: number | null;
+  projRevenue: number | null;
+  projCost: number | null;
+  projProfit: number | null;
+}
+
+export interface Pulse {
+  points: PulsePoint[]; // cumulative across the year
+  assumptions: { weeklyGrowthPct: number; laborPct: number; foodPct: number; overheadPct: number };
+  ytd: { revenue: number; cost: number; profit: number; marginPct: number | null; throughWeek: string | null };
+  projectedYearEnd: { revenue: number; cost: number; profit: number; marginPct: number | null };
+}
+
+/**
+ * Cumulative revenue/cost/profit to date, then a dotted projection to year-end.
+ * Cost model = actual labor + modeled food + modeled overhead (gas/utilities/
+ * other). Projection = recent run-rate compounded by a derived weekly growth
+ * rate, with cost ratios held to their blended actuals. Assumptions are
+ * returned so the UI can show (and later let the user tune) them.
+ */
+export async function getPulse(): Promise<Pulse> {
+  const [rollups, metrics] = await Promise.all([
+    prisma.weeklyRollup.findMany({ orderBy: { weekStart: "asc" } }),
+    prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
+  ]);
+
+  const weeks = rollups
+    .filter((r) => n(r.totalRevenue) != null)
+    .map((r) => ({ week: iso(r.weekStart), revenue: n(r.totalRevenue) ?? 0, labor: n(r.laborCost) ?? 0 }));
+
+  const totRev = weeks.reduce((s, w) => s + w.revenue, 0);
+  const totLabor = weeks.reduce((s, w) => s + w.labor, 0);
+  const laborPct = totRev ? totLabor / totRev : 0.3;
+
+  let foodSum = 0, foodRev = 0;
+  for (const m of metrics) {
+    const f = n(m.foodPurchases), s = n(m.netSales);
+    if (f != null && s != null) { foodSum += f; foodRev += s; }
+  }
+  const foodPct = foodRev ? Math.min(0.6, foodSum / foodRev) : 0.3;
+  const overheadPct = 0.08; // gas / utilities / other — tunable assumption
+
+  const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+  const rev = weeks.map((w) => w.revenue);
+  const recent = avg(rev.slice(-4));
+  const earlier = avg(rev.slice(-8, -4));
+  let weeklyGrowth = earlier > 0 ? Math.pow(recent / earlier, 1 / 4) - 1 : 0;
+  // Keep the forecast believable: cap sustained weekly growth tightly.
+  weeklyGrowth = Math.max(-0.01, Math.min(0.01, weeklyGrowth));
+
+  const points: PulsePoint[] = [];
+  let cumRev = 0, cumCost = 0, cumProfit = 0;
+  for (const w of weeks) {
+    const cost = w.labor + foodPct * w.revenue + overheadPct * w.revenue;
+    cumRev += w.revenue; cumCost += cost; cumProfit += w.revenue - cost;
+    points.push({
+      week: w.week,
+      actualRevenue: cumRev, actualCost: cumCost, actualProfit: cumProfit,
+      projRevenue: null, projCost: null, projProfit: null,
+    });
+  }
+
+  const lastWeek = weeks.length ? weeks[weeks.length - 1].week : null;
+  const ytd = {
+    revenue: cumRev, cost: cumCost, profit: cumProfit,
+    marginPct: cumRev ? cumProfit / cumRev : null, throughWeek: lastWeek,
+  };
+
+  // Connect the projection line to the actual line at the boundary.
+  if (points.length) {
+    const last = points[points.length - 1];
+    last.projRevenue = last.actualRevenue;
+    last.projCost = last.actualCost;
+    last.projProfit = last.actualProfit;
+  }
+
+  let pRev = cumRev, pCost = cumCost, pProfit = cumProfit;
+  const base = recent > 0 ? recent : rev.length ? rev[rev.length - 1] : 0;
+  if (lastWeek) {
+    const yearEnd = `${lastWeek.slice(0, 4)}-12-31`;
+    let wk = lastWeek, k = 1;
+    while (true) {
+      wk = addDays(wk, 7);
+      if (wk > yearEnd) break;
+      const fr = base * Math.pow(1 + weeklyGrowth, k);
+      const fc = laborPct * fr + foodPct * fr + overheadPct * fr;
+      pRev += fr; pCost += fc; pProfit += fr - fc;
+      points.push({
+        week: wk,
+        actualRevenue: null, actualCost: null, actualProfit: null,
+        projRevenue: pRev, projCost: pCost, projProfit: pProfit,
+      });
+      k++;
+    }
+  }
+
+  return {
+    points,
+    assumptions: { weeklyGrowthPct: weeklyGrowth, laborPct, foodPct, overheadPct },
+    ytd,
+    projectedYearEnd: { revenue: pRev, cost: pCost, profit: pProfit, marginPct: pRev ? pProfit / pRev : null },
   };
 }
 

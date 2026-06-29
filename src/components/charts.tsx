@@ -13,20 +13,13 @@ import {
   YAxis,
 } from "recharts";
 import { money, moneyCompact, percent, shortDate } from "@/lib/format";
+import { channelLabel } from "@/lib/labels";
 
 const AXIS = { fill: "#717171", fontSize: 11 };
 const GRID = "#EBEBEB";
 const CORAL = "#FF385C";
 const TEAL = "#00A699";
 const GOLD = "#FFB400";
-
-export const channelLabel: Record<string, string> = {
-  CAFE_RETAIL: "Cafe · Clover",
-  CATERTRAX: "CaterTrax",
-  CATEREASE: "Caterease",
-  ALOHA: "Aloha",
-  OTHER: "Other",
-};
 
 function Box({ children }: { children: React.ReactNode }) {
   return (
@@ -42,7 +35,7 @@ export function SalesTrendChart({
 }: {
   series: { date: string; netSales: number | null; laborCost: number | null; laborPct: number | null }[];
 }) {
-  const data = series.filter((d) => d.netSales != null).slice(-30);
+  const data = series.filter((d) => d.netSales != null);
   return (
     <ResponsiveContainer width="100%" height={260}>
       <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
