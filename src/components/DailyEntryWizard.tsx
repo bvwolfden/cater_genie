@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type { EntryContext, DailyEntryInput } from "@/lib/entry";
 import { money, weekdayDate } from "@/lib/format";
 import { Card } from "./primitives";
@@ -49,8 +49,17 @@ const STEPS = [
   },
 ];
 
+const EMPTY: Vals = {
+  cafeSales: null, cateringSales: null, eventsSales: null, tax: null, laborHours: null, laborCost: null,
+  foodPurchases: null, operating: null, payroll: null, merchant: null, savings: null, holding: null, ccProcessing: null,
+};
+const nextDay = (s: string) => {
+  const d = new Date(`${s}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+};
+
 export function DailyEntryWizard({ ctx }: { ctx: EntryContext }) {
-  const router = useRouter();
   const [step, setStep] = useState(0);
   const [date, setDate] = useState(ctx.targetDate);
   const [notes, setNotes] = useState(ctx.existing?.notes ?? "");
@@ -89,8 +98,13 @@ export function DailyEntryWizard({ ctx }: { ctx: EntryContext }) {
         <h2 className="text-lg font-semibold text-ink">Saved — {weekdayDate(date)}</h2>
         <p className="mt-1 text-sm text-ink-2">Net sales {money(netSales)} recorded. The dashboard is updated.</p>
         <div className="mt-4 flex justify-center gap-2">
-          <button onClick={() => router.push("/")} className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white">View dashboard</button>
-          <button onClick={() => router.refresh()} className="rounded-lg border border-line px-4 py-2 text-sm font-medium text-ink-2 hover:bg-canvas-700">Enter another day</button>
+          <Link href={`/?date=${date}`} className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white">View dashboard</Link>
+          <button
+            onClick={() => { setVals({ ...EMPTY }); setNotes(""); setDate(nextDay(date)); setStep(0); setDone(false); }}
+            className="rounded-lg border border-line px-4 py-2 text-sm font-medium text-ink-2 hover:bg-canvas-700"
+          >
+            Enter another day
+          </button>
         </div>
       </Card>
     );
