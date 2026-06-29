@@ -1,0 +1,8 @@
+node_modules
+.next
+.git
+scripts/.pgdata
+drop
+*.xlsx
+prisma/seed-data/*.json
+docs/dashboard.png
