@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users } from "lucide-react";
+import { LayoutDashboard, Users, ClipboardCheck } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 const TABS = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/labor", label: "Labor", icon: Users },
+  { href: "/entry", label: "Daily Entry", icon: ClipboardCheck },
 ];
 
 export function Nav() {
