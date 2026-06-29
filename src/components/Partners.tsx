@@ -75,7 +75,7 @@ export function Partners({ pulse }: { pulse: Pulse }) {
       </div>
 
       <p className="mt-3 text-[11px] text-ink-3">
-        Assumes an equal 4-way split of net profit. Tell me the real partner names and ownership % to make this exact.
+        Equal 4-way split of net profit across all partners.
       </p>
     </Card>
   );
