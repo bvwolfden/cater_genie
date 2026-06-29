@@ -108,6 +108,7 @@ async function main() {
         laborCost: r.laborCost ?? null,
         laborPrev1: r.laborPrev1 ?? null,
         laborPrev2: r.laborPrev2 ?? null,
+        hoursPaid: r.hoursPaid ?? null,
         laborPct: r.laborPct ?? null,
       })),
     })

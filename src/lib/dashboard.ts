@@ -107,6 +107,38 @@ const prevYm = (ym: string) => {
 const pctChange = (cur: number | null, prior: number | null) =>
   cur == null || prior == null || prior === 0 ? null : (cur - prior) / Math.abs(prior);
 
+// Monthly aggregation of weekly rollups (2026 calendar months only).
+type MonthAgg = { s26: number; s25: number; l26: number; l25: number; l24: number; weeks: number };
+const emptyMonth = (): MonthAgg => ({ s26: 0, s25: 0, l26: 0, l25: 0, l24: 0, weeks: 0 });
+
+function monthlyBuckets(
+  rows: { weekStart: Date; totalRevenue: unknown; revenuePrev1: unknown; laborCost: unknown; laborPrev1: unknown; laborPrev2: unknown }[]
+): Map<string, MonthAgg> {
+  const m = new Map<string, MonthAgg>();
+  for (const r of rows) {
+    const ym = iso(r.weekStart).slice(0, 7);
+    if (!ym.startsWith("2026")) continue;
+    const a = m.get(ym) ?? emptyMonth();
+    const rev = n(r.totalRevenue) ?? 0;
+    a.s26 += rev;
+    a.s25 += n(r.revenuePrev1) ?? 0;
+    a.l26 += n(r.laborCost) ?? 0;
+    a.l25 += n(r.laborPrev1) ?? 0;
+    a.l24 += n(r.laborPrev2) ?? 0;
+    if (rev > 0) a.weeks += 1;
+    m.set(ym, a);
+  }
+  return m;
+}
+
+/** Latest month with ≥4 weeks of data; falls back to latest month with any. */
+function latestCompleteMonth(m: Map<string, MonthAgg>): string {
+  const complete = [...m.keys()].filter((k) => m.get(k)!.weeks >= 4).sort();
+  if (complete.length) return complete[complete.length - 1];
+  const any = [...m.keys()].filter((k) => m.get(k)!.s26 > 0 || m.get(k)!.l26 > 0).sort();
+  return any[any.length - 1] ?? "";
+}
+
 export async function getDashboard(opts?: {
   date?: string;
   from?: string;
@@ -287,24 +319,13 @@ export async function getDashboard(opts?: {
   };
 
   // --- MoM / YoY comparisons (from weekly rollups: has both years) ---------
-  const ZERO = { s26: 0, s25: 0, l26: 0, l25: 0, l24: 0 };
-  const monthly = new Map<string, typeof ZERO>();
-  for (const r of rollupRows) {
-    const ym = iso(r.weekStart).slice(0, 7);
-    const m = monthly.get(ym) ?? { ...ZERO };
-    m.s26 += n(r.totalRevenue) ?? 0;
-    m.s25 += n(r.revenuePrev1) ?? 0;
-    m.l26 += n(r.laborCost) ?? 0;
-    m.l25 += n(r.laborPrev1) ?? 0;
-    m.l24 += n(r.laborPrev2) ?? 0;
-    monthly.set(ym, m);
-  }
-  const monthKeys = [...monthly.keys()].filter((key) => { const m = monthly.get(key)!; return m.s26 > 0 || m.l26 > 0; }).sort();
-  let selYm = (selectedDate ?? latestDate ?? "").slice(0, 7);
-  if (!monthly.has(selYm) && monthKeys.length) selYm = monthKeys[monthKeys.length - 1];
+  const monthly = monthlyBuckets(rollupRows);
+  // Anchor MoM/YoY to the latest COMPLETE month (≥4 weeks of data) so a
+  // partial current month doesn't distort the comparison.
+  const selYm = latestCompleteMonth(monthly);
   const prevKey = prevYm(selYm);
-  const curMonth = monthly.get(selYm) ?? { ...ZERO };
-  const prevMonth = monthly.get(prevKey) ?? { ...ZERO };
+  const curMonth = monthly.get(selYm) ?? emptyMonth();
+  const prevMonth = monthly.get(prevKey) ?? emptyMonth();
 
   const mom: PeriodComparison = {
     label: "Month over Month",
@@ -397,9 +418,12 @@ export async function getPulse(): Promise<Pulse> {
     .filter((r) => n(r.totalRevenue) != null)
     .map((r) => ({ week: iso(r.weekStart), revenue: n(r.totalRevenue) ?? 0, labor: n(r.laborCost) ?? 0 }));
 
-  const totRev = weeks.reduce((s, w) => s + w.revenue, 0);
-  const totLabor = weeks.reduce((s, w) => s + w.labor, 0);
-  const laborPct = totRev ? totLabor / totRev : 0.3;
+  // Blend labor % only over weeks that have labor recorded (early 2026 weeks
+  // have revenue but no labor in the source).
+  const laborWeeks = weeks.filter((w) => w.labor > 0);
+  const lwRev = laborWeeks.reduce((s, w) => s + w.revenue, 0);
+  const lwLab = laborWeeks.reduce((s, w) => s + w.labor, 0);
+  const laborPct = lwRev ? lwLab / lwRev : 0.35;
 
   let foodSum = 0, foodRev = 0;
   for (const m of metrics) {
@@ -420,7 +444,8 @@ export async function getPulse(): Promise<Pulse> {
   const points: PulsePoint[] = [];
   let cumRev = 0, cumCost = 0, cumProfit = 0;
   for (const w of weeks) {
-    const cost = w.labor + foodPct * w.revenue + overheadPct * w.revenue;
+    const wl = w.labor > 0 ? w.labor : laborPct * w.revenue;
+    const cost = wl + foodPct * w.revenue + overheadPct * w.revenue;
     cumRev += w.revenue; cumCost += cost; cumProfit += w.revenue - cost;
     points.push({
       week: w.week,
@@ -503,7 +528,7 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
 
   // Weekly labor trend (2026 actual) + projection to year-end.
   const wk = rollups
-    .filter((r) => n(r.laborCost) != null)
+    .filter((r) => (n(r.laborCost) ?? 0) > 0)
     .map((r) => ({ week: iso(r.weekStart), labor: n(r.laborCost) ?? 0, pct: n(r.laborPct), revenue: n(r.totalRevenue) ?? 0 }));
   const totalRev = wk.reduce((s, w) => s + w.revenue, 0);
   const totalLab = wk.reduce((s, w) => s + w.labor, 0);
@@ -534,24 +559,12 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
     }
   }
 
-  // MoM / YoY (labor-focused) from weekly rollups.
-  const ZERO = { s26: 0, s25: 0, l26: 0, l25: 0, l24: 0 };
-  const monthly = new Map<string, typeof ZERO>();
-  for (const r of rollups) {
-    const ym = iso(r.weekStart).slice(0, 7);
-    const m = monthly.get(ym) ?? { ...ZERO };
-    m.s26 += n(r.totalRevenue) ?? 0;
-    m.s25 += n(r.revenuePrev1) ?? 0;
-    m.l26 += n(r.laborCost) ?? 0;
-    m.l25 += n(r.laborPrev1) ?? 0;
-    m.l24 += n(r.laborPrev2) ?? 0;
-    monthly.set(ym, m);
-  }
-  const keys = [...monthly.keys()].filter((key) => { const m = monthly.get(key)!; return m.s26 > 0 || m.l26 > 0; }).sort();
-  const selYm = keys[keys.length - 1] ?? "";
+  // MoM / YoY (labor-focused) from weekly rollups — anchored to last complete month.
+  const monthly = monthlyBuckets(rollups);
+  const selYm = latestCompleteMonth(monthly);
   const prevKey = prevYm(selYm);
-  const c = monthly.get(selYm) ?? { ...ZERO };
-  const p = monthly.get(prevKey) ?? { ...ZERO };
+  const c = monthly.get(selYm) ?? emptyMonth();
+  const p = monthly.get(prevKey) ?? emptyMonth();
   const mom: PeriodComparison = {
     label: "Month over Month",
     currentLabel: ymLabel(selYm),

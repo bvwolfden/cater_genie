@@ -250,17 +250,24 @@ def extract_weekly():
     wb = load_workbook(COMP_XLSX, data_only=True)
     ws = wb["Revenue Comp 25_24_23"]
     h = header_map(ws)
-    # Prior-year weekly labor lives in 'Labor comparison 24_25', aligned row-by-row
-    # with the revenue sheet (both weekly-sequential from start of year):
-    #   col2 = 2024 labor $, col4 = 2025 (Gross) weekly labor $.
+    # IMPORTANT label notes from the source sheets:
+    #  - 'Revenue Comp' "(gross) weekly labor $ 2025" is PRIOR-YEAR (2025) labor.
+    #  - Actual 2026 weekly labor lives in the 'Revenue to Labor' sheet (Total
+    #    column = fully-loaded payroll incl. taxes/draws), with Hours Paid and
+    #    % of Revenue. Aligned row-by-row with 'Revenue Comp' (same weeks).
+    #  - 'Labor comparison 24_25' col2 = 2024 labor.
     labor_ws = wb["Labor comparison 24_25"]
+    r2l = wb["Revenue to Labor"]
+    h2 = header_map(r2l)
+    c_total26 = find_col(h2, "total")              # 2026 fully-loaded labor
+    c_hours26 = find_col(h2, "hours", "paid")      # 2026 hours paid
+    c_lpct26 = find_col(h2, "%", "revenue")        # 2026 labor % of revenue
 
     c_week = find_col(h, "week")
     c_2023 = find_col(h, "2023")
     c_2025 = find_col(h, "revenue 2025")
     c_2026 = find_col(h, "revenue 2026")
-    c_labor = find_col(h, "gross", "weekly")  # (Gross) Weekly Labor
-    c_pct = find_col(h, "labor %", "2026")
+    c_labor2025 = find_col(h, "gross", "weekly")  # "(gross) weekly labor $ 2025"
     c_ease = find_col(h, "ease", "subtotal")
     c_trax = find_col(h, "trax", "subtotal")
     c_cafe = find_col(h, "cafe", "net")
@@ -282,20 +289,26 @@ def extract_weekly():
         start, end = parse_week_start(wk)
         if not start:
             continue
+        # This sheet is all 2026 weeks; coerce any typo'd year (e.g. "6/15/25").
+        if not start.startswith("2026"):
+            start = "2026" + start[4:]
         total = num(ws.cell(row=r, column=c_2026).value) if c_2026 else None
         prev1 = num(ws.cell(row=r, column=c_2025).value) if c_2025 else None
         prev3 = num(ws.cell(row=r, column=c_2023).value) if c_2023 else None
-        labor = num(ws.cell(row=r, column=c_labor).value) if c_labor else None
-        pct = num(ws.cell(row=r, column=c_pct).value) if c_pct else None
+        labor2026 = num(r2l.cell(row=r, column=c_total26).value) if c_total26 else None
+        hours2026 = num(r2l.cell(row=r, column=c_hours26).value) if c_hours26 else None
+        lpct2026 = num(r2l.cell(row=r, column=c_lpct26).value) if c_lpct26 else None
+        if lpct2026 is None and labor2026 and total:
+            lpct2026 = round(labor2026 / total, 4)
+        labor2025 = num(ws.cell(row=r, column=c_labor2025).value) if c_labor2025 else None
         labor2024 = num(labor_ws.cell(row=r, column=2).value)
-        labor2025 = num(labor_ws.cell(row=r, column=4).value)
-        if any(x is not None for x in (total, prev1, prev3, labor, pct, labor2025)):
+        if any(x is not None for x in (total, prev1, prev3, labor2026, labor2025)):
             rollups[start] = {
                 "weekStart": start, "weekEnd": end,
                 "totalRevenue": total, "revenuePrev1": prev1,
                 "revenuePrev2": None, "revenuePrev3": prev3,
-                "laborCost": labor, "laborPrev1": labor2025, "laborPrev2": labor2024,
-                "laborPct": pct, "projectedTotal": None,
+                "laborCost": labor2026, "laborPrev1": labor2025, "laborPrev2": labor2024,
+                "hoursPaid": hours2026, "laborPct": lpct2026, "projectedTotal": None,
             }
         chan(ws, "CATEREASE", c_ease, start, end, num(ws.cell(row=r, column=c_ease).value) if c_ease else None, "actual")
         chan(ws, "CATERTRAX", c_trax, start, end, num(ws.cell(row=r, column=c_trax).value) if c_trax else None, "actual")

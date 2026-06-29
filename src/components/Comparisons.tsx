@@ -80,7 +80,7 @@ export function ComparisonPanels({ mom, yoy }: { mom: PeriodComparison; yoy: Per
 export function Comparisons({ data }: { data: Dashboard }) {
   return (
     <Card className="card-pad">
-      <SectionHeader title="Comparisons" subtitle="Month-over-month & year-over-year" />
+      <SectionHeader title="Comparisons" subtitle="Last complete month · vs prior month and prior year" />
       <ComparisonPanels mom={data.comparisons.mom} yoy={data.comparisons.yoy} />
       <p className="mt-3 text-[11px] text-ink-3">
         Comparisons computed from weekly revenue & labor (2026 vs 2025).
