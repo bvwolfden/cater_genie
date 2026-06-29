@@ -1,0 +1,196 @@
+// CaterGenie — operational data model.
+//
+// Architecture: ingestion jobs (Clover / CaterTrax / When I Work / QuickBooks)
+// write into the normalized tables below; a rollup builds `DailyMetric`, which
+// the dashboard reads. Today the spreadsheet seeder populates these directly.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum SourceSystem {
+  CLOVER // retail POS
+  CATERTRAX // corporate delivery
+  WHENIWORK // labor / time
+  QUICKBOOKS // accounting
+  CATEREASE // events (investigated separately)
+  SPREADSHEET // historical seed
+  MANUAL
+}
+
+enum SalesChannel {
+  CAFE_RETAIL // Clover / cafe net sales
+  CATERTRAX // corporate delivery
+  CATEREASE // events
+  ALOHA // legacy POS line seen in projections
+  OTHER
+}
+
+enum AccountType {
+  OPERATING
+  PAYROLL
+  MERCHANT
+  SAVINGS
+  HOLDING
+  CC_PROCESSING
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Daily read model (the "Daily Tracker")
+// ---------------------------------------------------------------------------
+
+/// One canonical row per business day — what the dashboard reads first.
+model DailyMetric {
+  id            Int       @id @default(autoincrement())
+  date          DateTime  @unique @db.Date
+  weekLabel     String?
+  netSales      Decimal?  @db.Decimal(14, 2)
+  tax           Decimal?  @db.Decimal(14, 2)
+  laborCost     Decimal?  @db.Decimal(14, 2)
+  laborHours    Decimal?  @db.Decimal(10, 2)
+  laborPct      Decimal?  @db.Decimal(8, 5) // fraction: 0.27 = 27%
+  foodPurchases Decimal?  @db.Decimal(14, 2)
+  notes         String?
+  source        SourceSystem @default(SPREADSHEET)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([date])
+}
+
+/// Channel-grain daily sales — the target shape for live connectors
+/// (Clover retail, CaterTrax delivery). Empty until connectors run.
+model DailySales {
+  id         Int          @id @default(autoincrement())
+  date       DateTime     @db.Date
+  channel    SalesChannel
+  netSales   Decimal?     @db.Decimal(14, 2)
+  tax        Decimal?     @db.Decimal(14, 2)
+  grossSales Decimal?     @db.Decimal(14, 2)
+  orderCount Int?
+  source     SourceSystem @default(SPREADSHEET)
+  createdAt  DateTime     @default(now())
+
+  @@unique([date, channel])
+  @@index([date])
+}
+
+/// Per employee-day labor punch (When I Work / timesheet export).
+model LaborEntry {
+  id           Int          @id @default(autoincrement())
+  date         DateTime     @db.Date
+  employeeId   String?
+  firstName    String?
+  lastName     String?
+  department   String? // "schedule": Cater Hot, Cafe, Delivery, SALES...
+  position     String?
+  jobSite      String?
+  regularHours Decimal?     @db.Decimal(10, 2)
+  otHours      Decimal?     @db.Decimal(10, 2)
+  doubleOtHours Decimal?    @db.Decimal(10, 2)
+  hourlyRate   Decimal?     @db.Decimal(10, 2)
+  paidTotal    Decimal?     @db.Decimal(14, 2)
+  tips         Decimal?     @db.Decimal(14, 2)
+  earningsTotal Decimal?    @db.Decimal(14, 2)
+  source       SourceSystem @default(SPREADSHEET)
+  createdAt    DateTime     @default(now())
+
+  @@index([date])
+  @@index([department])
+}
+
+/// QuickBooks account balance snapshot (date, account).
+model AccountBalance {
+  id        Int          @id @default(autoincrement())
+  date      DateTime     @db.Date
+  account   AccountType
+  balance   Decimal      @db.Decimal(14, 2)
+  source    SourceSystem @default(SPREADSHEET)
+  createdAt DateTime     @default(now())
+
+  @@unique([date, account])
+  @@index([date])
+}
+
+// ---------------------------------------------------------------------------
+// Weekly comparisons & projections
+// ---------------------------------------------------------------------------
+
+/// Weekly revenue by channel — actual vs projected (Sales Comp + projections).
+model WeeklyChannelRevenue {
+  id        Int          @id @default(autoincrement())
+  weekStart DateTime     @db.Date
+  weekEnd   DateTime?    @db.Date
+  channel   SalesChannel
+  actual    Decimal?     @db.Decimal(14, 2)
+  projected Decimal?     @db.Decimal(14, 2)
+  createdAt DateTime     @default(now())
+
+  @@unique([weekStart, channel])
+  @@index([weekStart])
+}
+
+/// Weekly company rollup — totals, YoY history, and labor (Weekly Sales Comp).
+model WeeklyRollup {
+  id             Int       @id @default(autoincrement())
+  weekStart      DateTime  @unique @db.Date
+  weekEnd        DateTime? @db.Date
+  totalRevenue   Decimal?  @db.Decimal(14, 2)
+  revenuePrev1   Decimal?  @db.Decimal(14, 2) // prior year
+  revenuePrev2   Decimal?  @db.Decimal(14, 2)
+  revenuePrev3   Decimal?  @db.Decimal(14, 2)
+  projectedTotal Decimal?  @db.Decimal(14, 2)
+  laborCost      Decimal?  @db.Decimal(14, 2)
+  laborPct       Decimal?  @db.Decimal(8, 5)
+  hoursPaid      Decimal?  @db.Decimal(10, 2)
+  createdAt      DateTime  @default(now())
+
+  @@index([weekStart])
+}
+
+// ---------------------------------------------------------------------------
+// Ops / provenance
+// ---------------------------------------------------------------------------
+
+/// One row per ingestion job execution — powers data-freshness on the dashboard.
+model SyncRun {
+  id          Int          @id @default(autoincrement())
+  source      SourceSystem
+  status      SyncStatus   @default(PENDING)
+  rowsWritten Int          @default(0)
+  startedAt   DateTime     @default(now())
+  finishedAt  DateTime?
+  message     String?
+
+  @@index([source, startedAt])
+}
+
+/// Cached AI insight for a given date/scope, so we don't re-bill on every load.
+model Insight {
+  id        Int      @id @default(autoincrement())
+  scopeDate DateTime @db.Date
+  scope     String   @default("daily") // daily | weekly
+  headline  String?
+  body      String? // markdown narrative
+  payload   Json? // structured highlights/alerts
+  model     String?
+  createdAt DateTime @default(now())
+
+  @@unique([scopeDate, scope])
+}
