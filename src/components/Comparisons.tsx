@@ -68,16 +68,22 @@ function Panel({ cmp, icon }: { cmp: PeriodComparison; icon: React.ReactNode }) 
   );
 }
 
+export function ComparisonPanels({ mom, yoy }: { mom: PeriodComparison; yoy: PeriodComparison }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+      <Panel cmp={mom} icon={<CalendarClock className="h-3.5 w-3.5" />} />
+      <Panel cmp={yoy} icon={<TrendingUp className="h-3.5 w-3.5" />} />
+    </div>
+  );
+}
+
 export function Comparisons({ data }: { data: Dashboard }) {
   return (
     <Card className="card-pad">
       <SectionHeader title="Comparisons" subtitle="Month-over-month & year-over-year" />
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <Panel cmp={data.comparisons.mom} icon={<CalendarClock className="h-3.5 w-3.5" />} />
-        <Panel cmp={data.comparisons.yoy} icon={<TrendingUp className="h-3.5 w-3.5" />} />
-      </div>
+      <ComparisonPanels mom={data.comparisons.mom} yoy={data.comparisons.yoy} />
       <p className="mt-3 text-[11px] text-ink-3">
-        Comparisons computed from weekly revenue (2026 vs 2025). Prior-year labor $ isn’t in the current data set.
+        Comparisons computed from weekly revenue & labor (2026 vs 2025).
       </p>
     </Card>
   );

@@ -287,21 +287,24 @@ export async function getDashboard(opts?: {
   };
 
   // --- MoM / YoY comparisons (from weekly rollups: has both years) ---------
-  const monthly = new Map<string, { s26: number; s25: number; l26: number }>();
+  const ZERO = { s26: 0, s25: 0, l26: 0, l25: 0, l24: 0 };
+  const monthly = new Map<string, typeof ZERO>();
   for (const r of rollupRows) {
     const ym = iso(r.weekStart).slice(0, 7);
-    const m = monthly.get(ym) ?? { s26: 0, s25: 0, l26: 0 };
+    const m = monthly.get(ym) ?? { ...ZERO };
     m.s26 += n(r.totalRevenue) ?? 0;
     m.s25 += n(r.revenuePrev1) ?? 0;
     m.l26 += n(r.laborCost) ?? 0;
+    m.l25 += n(r.laborPrev1) ?? 0;
+    m.l24 += n(r.laborPrev2) ?? 0;
     monthly.set(ym, m);
   }
-  const monthKeys = [...monthly.keys()].sort();
+  const monthKeys = [...monthly.keys()].filter((key) => { const m = monthly.get(key)!; return m.s26 > 0 || m.l26 > 0; }).sort();
   let selYm = (selectedDate ?? latestDate ?? "").slice(0, 7);
   if (!monthly.has(selYm) && monthKeys.length) selYm = monthKeys[monthKeys.length - 1];
   const prevKey = prevYm(selYm);
-  const curMonth = monthly.get(selYm) ?? { s26: 0, s25: 0, l26: 0 };
-  const prevMonth = monthly.get(prevKey) ?? { s26: 0, s25: 0, l26: 0 };
+  const curMonth = monthly.get(selYm) ?? { ...ZERO };
+  const prevMonth = monthly.get(prevKey) ?? { ...ZERO };
 
   const mom: PeriodComparison = {
     label: "Month over Month",
@@ -316,9 +319,8 @@ export async function getDashboard(opts?: {
     currentLabel: ymLabel(selYm),
     priorLabel: `${Number(selYm.slice(0, 4)) - 1}`,
     sales: { current: curMonth.s26 || null, prior: curMonth.s25 || null, deltaPct: pctChange(curMonth.s26 || null, curMonth.s25 || null) },
-    // Prior-year labor $ isn't in the current seed; surfaced as unavailable.
-    labor: { current: curMonth.l26 || null, prior: null, deltaPct: null },
-    laborPct: { current: curMonth.s26 ? curMonth.l26 / curMonth.s26 : null, prior: null },
+    labor: { current: curMonth.l26 || null, prior: curMonth.l25 || null, deltaPct: pctChange(curMonth.l26 || null, curMonth.l25 || null) },
+    laborPct: { current: curMonth.s26 ? curMonth.l26 / curMonth.s26 : null, prior: curMonth.s25 ? curMonth.l25 / curMonth.s25 : null },
   };
 
   return {
@@ -466,6 +468,115 @@ export async function getPulse(): Promise<Pulse> {
     assumptions: { weeklyGrowthPct: weeklyGrowth, laborPct, foodPct, overheadPct },
     ytd,
     projectedYearEnd: { revenue: pRev, cost: pCost, profit: pProfit, marginPct: pRev ? pProfit / pRev : null },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Labor analysis — period/range, weekly trend + projection, MoM, YoY
+// ---------------------------------------------------------------------------
+export interface LaborAnalysis {
+  availableDates: string[];
+  range: { from: string | null; to: string | null; laborCost: number; hours: number; laborPct: number | null; days: number };
+  weekly: { week: string; actualLabor: number | null; actualLaborPct: number | null; projLabor: number | null }[];
+  ytdLabor: number;
+  projectedYearEndLabor: number;
+  assumptions: { weeklyGrowthPct: number; laborPct: number };
+  comparisons: { mom: PeriodComparison; yoy: PeriodComparison };
+}
+
+export async function getLaborAnalysis(opts?: { from?: string; to?: string }): Promise<LaborAnalysis> {
+  const [rollups, metrics] = await Promise.all([
+    prisma.weeklyRollup.findMany({ orderBy: { weekStart: "asc" } }),
+    prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
+  ]);
+
+  // Range summary from daily labor (daily granularity available May–Jun).
+  const dseries = metrics.map((m) => ({ date: iso(m.date), labor: n(m.laborCost), hours: n(m.laborHours), sales: n(m.netSales) }));
+  const laborDates = dseries.filter((d) => d.labor != null).map((d) => d.date);
+  const to = opts?.to || laborDates[laborDates.length - 1] || null;
+  const from = opts?.from || laborDates[0] || null;
+  const inRange = dseries.filter((d) => (!from || d.date >= from) && (!to || d.date <= to));
+  const rLabor = inRange.reduce((s, d) => s + (d.labor ?? 0), 0);
+  const rHours = inRange.reduce((s, d) => s + (d.hours ?? 0), 0);
+  const rSales = inRange.reduce((s, d) => s + (d.sales ?? 0), 0);
+  const range = { from, to, laborCost: rLabor, hours: rHours, laborPct: rSales ? rLabor / rSales : null, days: inRange.filter((d) => d.labor != null).length };
+
+  // Weekly labor trend (2026 actual) + projection to year-end.
+  const wk = rollups
+    .filter((r) => n(r.laborCost) != null)
+    .map((r) => ({ week: iso(r.weekStart), labor: n(r.laborCost) ?? 0, pct: n(r.laborPct), revenue: n(r.totalRevenue) ?? 0 }));
+  const totalRev = wk.reduce((s, w) => s + w.revenue, 0);
+  const totalLab = wk.reduce((s, w) => s + w.labor, 0);
+  const blendedLaborPct = totalRev ? totalLab / totalRev : 0.4;
+  const labs = wk.map((w) => w.labor);
+  const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+  const recent = avg(labs.slice(-4));
+  const earlier = avg(labs.slice(-8, -4));
+  let weeklyGrowth = earlier > 0 ? Math.pow(recent / earlier, 1 / 4) - 1 : 0;
+  weeklyGrowth = Math.max(-0.01, Math.min(0.01, weeklyGrowth));
+
+  const weekly: LaborAnalysis["weekly"] = wk.map((w) => ({ week: w.week, actualLabor: w.labor, actualLaborPct: w.pct, projLabor: null }));
+  let ytdLabor = totalLab;
+  let projTotal = totalLab;
+  const lastWeek = wk.length ? wk[wk.length - 1].week : null;
+  if (weekly.length) weekly[weekly.length - 1].projLabor = wk[wk.length - 1].labor;
+  if (lastWeek) {
+    const base = recent > 0 ? recent : labs[labs.length - 1] ?? 0;
+    const yearEnd = `${lastWeek.slice(0, 4)}-12-31`;
+    let cur = lastWeek, k = 1;
+    while (true) {
+      cur = addDays(cur, 7);
+      if (cur > yearEnd) break;
+      const fl = base * Math.pow(1 + weeklyGrowth, k);
+      projTotal += fl;
+      weekly.push({ week: cur, actualLabor: null, actualLaborPct: blendedLaborPct, projLabor: fl });
+      k++;
+    }
+  }
+
+  // MoM / YoY (labor-focused) from weekly rollups.
+  const ZERO = { s26: 0, s25: 0, l26: 0, l25: 0, l24: 0 };
+  const monthly = new Map<string, typeof ZERO>();
+  for (const r of rollups) {
+    const ym = iso(r.weekStart).slice(0, 7);
+    const m = monthly.get(ym) ?? { ...ZERO };
+    m.s26 += n(r.totalRevenue) ?? 0;
+    m.s25 += n(r.revenuePrev1) ?? 0;
+    m.l26 += n(r.laborCost) ?? 0;
+    m.l25 += n(r.laborPrev1) ?? 0;
+    m.l24 += n(r.laborPrev2) ?? 0;
+    monthly.set(ym, m);
+  }
+  const keys = [...monthly.keys()].filter((key) => { const m = monthly.get(key)!; return m.s26 > 0 || m.l26 > 0; }).sort();
+  const selYm = keys[keys.length - 1] ?? "";
+  const prevKey = prevYm(selYm);
+  const c = monthly.get(selYm) ?? { ...ZERO };
+  const p = monthly.get(prevKey) ?? { ...ZERO };
+  const mom: PeriodComparison = {
+    label: "Month over Month",
+    currentLabel: ymLabel(selYm),
+    priorLabel: ymLabel(prevKey),
+    sales: { current: c.s26 || null, prior: p.s26 || null, deltaPct: pctChange(c.s26 || null, p.s26 || null) },
+    labor: { current: c.l26 || null, prior: p.l26 || null, deltaPct: pctChange(c.l26 || null, p.l26 || null) },
+    laborPct: { current: c.s26 ? c.l26 / c.s26 : null, prior: p.s26 ? p.l26 / p.s26 : null },
+  };
+  const yoy: PeriodComparison = {
+    label: "Year over Year",
+    currentLabel: ymLabel(selYm),
+    priorLabel: `${Number(selYm.slice(0, 4)) - 1}`,
+    sales: { current: c.s26 || null, prior: c.s25 || null, deltaPct: pctChange(c.s26 || null, c.s25 || null) },
+    labor: { current: c.l26 || null, prior: c.l25 || null, deltaPct: pctChange(c.l26 || null, c.l25 || null) },
+    laborPct: { current: c.s26 ? c.l26 / c.s26 : null, prior: c.s25 ? c.l25 / c.s25 : null },
+  };
+
+  return {
+    availableDates: laborDates,
+    range,
+    weekly,
+    ytdLabor,
+    projectedYearEndLabor: projTotal,
+    assumptions: { weeklyGrowthPct: weeklyGrowth, laborPct: blendedLaborPct },
+    comparisons: { mom, yoy },
   };
 }
 

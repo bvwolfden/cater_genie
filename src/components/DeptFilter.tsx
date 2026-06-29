@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 
 export function DeptFilter({
@@ -11,7 +11,16 @@ export function DeptFilter({
   active: string;
 }) {
   const router = useRouter();
+  const params = useSearchParams();
   const options = ["all", ...departments];
+
+  function go(dept: string) {
+    const q = new URLSearchParams(params.toString());
+    if (dept === "all") q.delete("dept");
+    else q.set("dept", dept);
+    const qs = q.toString();
+    router.push(qs ? `/labor?${qs}` : "/labor");
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -20,7 +29,7 @@ export function DeptFilter({
         return (
           <button
             key={d}
-            onClick={() => router.push(d === "all" ? "/labor" : `/labor?dept=${encodeURIComponent(d)}`)}
+            onClick={() => go(d)}
             className={cn(
               "rounded-full border px-3 py-1.5 text-xs font-medium transition",
               isActive

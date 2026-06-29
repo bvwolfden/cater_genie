@@ -7,6 +7,7 @@ import {
   Cell,
   ComposedChart,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -156,6 +157,45 @@ export function WeeklyCompChart({
         <Bar dataKey="total" fill={CORAL} radius={[5, 5, 0, 0]} barSize={16} isAnimationActive={false} />
         <Line type="monotone" dataKey="priorYear" stroke="#A6A6A6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
         <Line type="monotone" dataKey="projected" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// --- Weekly labor cost trend + projection -----------------------------------
+export function LaborTrendChart({
+  weekly,
+  boundary,
+}: {
+  weekly: { week: string; actualLabor: number | null; projLabor: number | null }[];
+  boundary: string | null;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <ComposedChart data={weekly} margin={{ top: 10, right: 12, bottom: 0, left: 4 }}>
+        <CartesianGrid stroke={GRID} vertical={false} />
+        <XAxis dataKey="week" tickFormatter={(d) => shortDate(d)} tick={AXIS} tickLine={false} axisLine={false} minTickGap={28} />
+        <YAxis tickFormatter={(v) => moneyCompact(v)} tick={AXIS} tickLine={false} axisLine={false} width={54} />
+        {boundary && <ReferenceLine x={boundary} stroke="#C2C2C2" strokeDasharray="3 3" label={{ value: "today", position: "top", fill: "#A6A6A6", fontSize: 10 }} />}
+        <Tooltip
+          cursor={{ stroke: "#DDDDDD" }}
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            const p = payload[0].payload as { actualLabor: number | null; projLabor: number | null };
+            const v = p.actualLabor ?? p.projLabor;
+            const projected = p.actualLabor == null;
+            return (
+              <div className="rounded-xl border border-line bg-white px-3 py-2 text-xs shadow-card">
+                <div className="mb-1 font-semibold text-ink">
+                  Week of {shortDate(label as string)} {projected && <span className="text-ink-3">· projected</span>}
+                </div>
+                <div className="text-amber">Labor {money(v)}</div>
+              </div>
+            );
+          }}
+        />
+        <Line type="monotone" dataKey="actualLabor" stroke={GOLD} strokeWidth={2.5} dot={false} isAnimationActive={false} connectNulls={false} />
+        <Line type="monotone" dataKey="projLabor" stroke={GOLD} strokeWidth={2} strokeDasharray="3 4" dot={false} isAnimationActive={false} connectNulls={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );

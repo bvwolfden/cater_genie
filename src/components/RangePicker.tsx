@@ -13,10 +13,12 @@ export function RangePicker({
   from,
   to,
   availableDates,
+  basePath = "/",
 }: {
   from: string | null;
   to: string | null;
   availableDates: string[];
+  basePath?: string;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -30,7 +32,7 @@ export function RangePicker({
     if (t) q.set("to", t);
     else q.delete("to");
     const qs = q.toString();
-    router.push(qs ? `/?${qs}` : "/");
+    router.push(qs ? `${basePath}?${qs}` : basePath);
   }
 
   const presets: { key: string; label: string; from: string }[] = anchor

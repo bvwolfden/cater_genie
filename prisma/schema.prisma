@@ -157,6 +157,8 @@ model WeeklyRollup {
   revenuePrev3   Decimal?  @db.Decimal(14, 2)
   projectedTotal Decimal?  @db.Decimal(14, 2)
   laborCost      Decimal?  @db.Decimal(14, 2)
+  laborPrev1     Decimal?  @db.Decimal(14, 2) // prior-year (2025) weekly labor
+  laborPrev2     Decimal?  @db.Decimal(14, 2) // 2024 weekly labor
   laborPct       Decimal?  @db.Decimal(8, 5)
   hoursPaid      Decimal?  @db.Decimal(10, 2)
   createdAt      DateTime  @default(now())

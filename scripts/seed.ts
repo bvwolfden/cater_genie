@@ -106,6 +106,8 @@ async function main() {
         revenuePrev3: r.revenuePrev3 ?? null,
         projectedTotal: r.projectedTotal ?? null,
         laborCost: r.laborCost ?? null,
+        laborPrev1: r.laborPrev1 ?? null,
+        laborPrev2: r.laborPrev2 ?? null,
         laborPct: r.laborPct ?? null,
       })),
     })

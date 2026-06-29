@@ -250,6 +250,10 @@ def extract_weekly():
     wb = load_workbook(COMP_XLSX, data_only=True)
     ws = wb["Revenue Comp 25_24_23"]
     h = header_map(ws)
+    # Prior-year weekly labor lives in 'Labor comparison 24_25', aligned row-by-row
+    # with the revenue sheet (both weekly-sequential from start of year):
+    #   col2 = 2024 labor $, col4 = 2025 (Gross) weekly labor $.
+    labor_ws = wb["Labor comparison 24_25"]
 
     c_week = find_col(h, "week")
     c_2023 = find_col(h, "2023")
@@ -283,12 +287,15 @@ def extract_weekly():
         prev3 = num(ws.cell(row=r, column=c_2023).value) if c_2023 else None
         labor = num(ws.cell(row=r, column=c_labor).value) if c_labor else None
         pct = num(ws.cell(row=r, column=c_pct).value) if c_pct else None
-        if any(x is not None for x in (total, prev1, prev3, labor, pct)):
+        labor2024 = num(labor_ws.cell(row=r, column=2).value)
+        labor2025 = num(labor_ws.cell(row=r, column=4).value)
+        if any(x is not None for x in (total, prev1, prev3, labor, pct, labor2025)):
             rollups[start] = {
                 "weekStart": start, "weekEnd": end,
                 "totalRevenue": total, "revenuePrev1": prev1,
                 "revenuePrev2": None, "revenuePrev3": prev3,
-                "laborCost": labor, "laborPct": pct, "projectedTotal": None,
+                "laborCost": labor, "laborPrev1": labor2025, "laborPrev2": labor2024,
+                "laborPct": pct, "projectedTotal": None,
             }
         chan(ws, "CATEREASE", c_ease, start, end, num(ws.cell(row=r, column=c_ease).value) if c_ease else None, "actual")
         chan(ws, "CATERTRAX", c_trax, start, end, num(ws.cell(row=r, column=c_trax).value) if c_trax else None, "actual")
