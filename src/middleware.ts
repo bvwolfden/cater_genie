@@ -6,7 +6,6 @@ const CLERK_ENABLED = Boolean(process.env.CLERK_SECRET_KEY);
 
 const isPublic = createRouteMatcher([
   "/sign-in(.*)",
-  "/sign-up(.*)",
   "/api/qbo/callback(.*)", // Intuit redirects here without a Clerk session
 ]);
 
