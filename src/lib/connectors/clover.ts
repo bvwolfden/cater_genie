@@ -42,23 +42,45 @@ export const cloverConnector: Connector = {
       );
     }
     const { start, end } = dayBounds(date);
-    const url =
-      `${BASE}/v3/merchants/${MERCHANT}/orders` +
-      `?filter=createdTime>=${start}&filter=createdTime<${end}` +
-      `&expand=payments&limit=1000`;
+    // Clover's Reporting "Net Sales" excludes tax, tips, and refunds.
+    // order.total INCLUDES tax, so summing it silently overstates net sales
+    // vs the merchant's own reports. Compute from payments instead:
+    // Σ(payment.amount − taxAmount − tipAmount) − Σ(refund.amount).
+    // Paginate: 1000 max per request.
+    type Payment = { amount?: number; taxAmount?: number; tipAmount?: number };
+    type Refund = { amount?: number };
+    type Order = { payments?: { elements?: Payment[] }; refunds?: { elements?: Refund[] } };
 
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${TOKEN}`, Accept: "application/json" },
-    });
-    if (!res.ok) {
-      throw new ConnectorUnavailableError(
-        "CLOVER",
-        `Clover API ${res.status}: ${await res.text()}`
-      );
+    let cents = 0;
+    let orderCount = 0;
+    for (let offset = 0; ; offset += 1000) {
+      const url =
+        `${BASE}/v3/merchants/${MERCHANT}/orders` +
+        `?filter=createdTime>=${start}&filter=createdTime<${end}` +
+        `&expand=payments,refunds&limit=1000&offset=${offset}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${TOKEN}`, Accept: "application/json" },
+      });
+      if (!res.ok) {
+        throw new ConnectorUnavailableError(
+          "CLOVER",
+          `Clover API ${res.status}: ${await res.text()}`
+        );
+      }
+      const data = (await res.json()) as { elements?: Order[] };
+      const orders = data.elements ?? [];
+      orderCount += orders.length;
+      for (const o of orders) {
+        for (const p of o.payments?.elements ?? []) {
+          cents += (p.amount ?? 0) - (p.taxAmount ?? 0) - (p.tipAmount ?? 0);
+        }
+        for (const r of o.refunds?.elements ?? []) {
+          cents -= r.amount ?? 0;
+        }
+      }
+      if (orders.length < 1000) break;
     }
-    const data = (await res.json()) as { elements?: Array<{ total?: number }> };
-    // Clover amounts are integer cents.
-    const cents = (data.elements ?? []).reduce((s, o) => s + (o.total ?? 0), 0);
+
     const iso = date.toISOString().slice(0, 10);
     return {
       sales: [
@@ -66,10 +88,12 @@ export const cloverConnector: Connector = {
           date: iso,
           channel: "CAFE_RETAIL",
           netSales: cents / 100,
-          orderCount: data.elements?.length ?? 0,
+          orderCount,
         },
       ],
-      note: "Aggregated from Clover orders (cents → dollars).",
+      // TODO: reconcile against Clover Reporting on the first live day —
+      // partial/line-item refunds can drift slightly from the report.
+      note: "Net sales from Clover payments (excl. tax & tips, less refunds).",
     };
   },
 };
