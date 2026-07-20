@@ -5,9 +5,15 @@ import { createImportBatch } from "@/lib/importer";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120; // AI parsing of a big sheet can take a while
 
-/** List recent import batches (newest first). */
-export async function GET() {
+/** List import batches (newest first). ?archived=1 returns the archive
+ * (rejected/dismissed cards) instead of the active list. */
+export async function GET(req: NextRequest) {
+  const archived = req.nextUrl.searchParams.get("archived") === "1";
+  // REJECTED counts as archived even for rows predating the archived column.
   const batches = await prisma.importBatch.findMany({
+    where: archived
+      ? { OR: [{ archived: true }, { status: "REJECTED" }] }
+      : { archived: false, status: { not: "REJECTED" } },
     orderBy: { createdAt: "desc" },
     take: 25,
   });

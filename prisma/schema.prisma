@@ -217,6 +217,7 @@ model ImportBatch {
   filename    String
   kind        String? // detected: daily_metrics | timesheet | catertrax_sales | caterease_bookings | unknown
   status      String    @default("PENDING") // PENDING | COMMITTED | REJECTED | FAILED
+  archived    Boolean   @default(false) // rejected/dismissed cards move to the Archive tab
   summary     String? // parser's one-line description of what it found
   parsed      Json? // structured rows awaiting review
   error       String?

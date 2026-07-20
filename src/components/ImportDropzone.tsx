@@ -70,7 +70,7 @@ function PreviewTable({ rows, cols }: { rows: Record<string, unknown>[]; cols: {
   );
 }
 
-function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: number, action: "commit" | "reject") => void; busy: boolean }) {
+function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: number, action: "commit" | "reject" | "dismiss") => void; busy: boolean }) {
   const [open, setOpen] = useState(batch.status === "PENDING");
   const p = batch.parsed ?? {};
   const days = p.days ?? [];
@@ -166,6 +166,15 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
               </button>
             </div>
           )}
+          {batch.status === "FAILED" && (
+            <button
+              onClick={() => onAction(batch.id, "dismiss")}
+              disabled={busy}
+              className="pill border border-line bg-white text-ink-2 transition hover:border-rose/40 hover:text-rose disabled:opacity-50"
+            >
+              <X className="h-3 w-3" /> Dismiss
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -178,12 +187,13 @@ export function ImportDropzone() {
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"recent" | "archive">("recent");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/import");
+    const res = await fetch(`/api/import${tab === "archive" ? "?archived=1" : ""}`);
     if (res.ok) setBatches((await res.json()).batches);
-  }, []);
+  }, [tab]);
 
   useEffect(() => {
     refresh();
@@ -208,7 +218,7 @@ export function ImportDropzone() {
     }
   }
 
-  async function onAction(id: number, action: "commit" | "reject") {
+  async function onAction(id: number, action: "commit" | "reject" | "dismiss") {
     setBusy(true);
     try {
       const res = await fetch(`/api/import/${id}`, {
@@ -270,10 +280,27 @@ export function ImportDropzone() {
 
       {error && <p className="text-xs text-rose">{error}</p>}
 
+      <div className="flex gap-1">
+        {(["recent", "archive"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition",
+              tab === t ? "bg-brand/10 text-brand" : "text-ink-3 hover:text-ink-2"
+            )}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
       {batches.map((b) => (
         <BatchCard key={b.id} batch={b} onAction={onAction} busy={busy} />
       ))}
-      {!batches.length && <p className="text-center text-xs text-ink-3">No imports yet.</p>}
+      {!batches.length && (
+        <p className="text-center text-xs text-ink-3">{tab === "archive" ? "Archive is empty." : "No imports yet."}</p>
+      )}
     </div>
   );
 }
