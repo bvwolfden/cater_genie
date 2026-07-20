@@ -26,6 +26,9 @@ next-env.d.ts
 /docs/dashboard.png
 /drop
 
+# typescript incremental build state
+tsconfig.tsbuildinfo
+
 # misc
 .DS_Store
 *.pem

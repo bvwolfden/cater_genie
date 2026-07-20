@@ -4,6 +4,77 @@ import { prisma } from "./db";
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const num = (v: unknown): number | null => (v == null ? null : Number(v as never));
 const toDate = (s: string) => new Date(`${s}T00:00:00Z`);
+const addDaysIso = (s: string, n: number) => {
+  const dt = new Date(`${s}T00:00:00Z`);
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+};
+
+/**
+ * Close the AI feedback loop: when a real day lands, score every open forecast
+ * that was predicting it. The next-day forecast is scored against this day's
+ * net sales; next-week forecasts are scored once their 7-day window is fully
+ * covered by actuals. `errorPct` is the signal the model reads next time.
+ */
+async function scoreForecasts(dateISO: string): Promise<number> {
+  const d = toDate(dateISO);
+  let scored = 0;
+
+  // --- next_day: forecasts whose target was exactly this date ---
+  const metric = await prisma.dailyMetric.findUnique({ where: { date: d } });
+  const actualNet = num(metric?.netSales);
+  const actualLaborPct = num(metric?.laborPct);
+  if (actualNet != null && actualNet !== 0) {
+    const dayForecasts = await prisma.forecast.findMany({
+      where: { mode: "live", horizon: "next_day", targetDate: d, scoredAt: null },
+    });
+    for (const fc of dayForecasts) {
+      const pred = num(fc.predNetSales);
+      const base = num(fc.baselineNetSales);
+      const err = pred == null ? null : (pred - actualNet) / actualNet;
+      await prisma.forecast.update({
+        where: { id: fc.id },
+        data: {
+          actualNetSales: actualNet, actualLaborPct,
+          errorPct: err, absErrorPct: err == null ? null : Math.abs(err),
+          baselineErrorPct: base == null ? null : (base - actualNet) / actualNet,
+          scoredAt: new Date(),
+        },
+      });
+      scored++;
+    }
+  }
+
+  // --- next_week: score any window now fully covered by actuals ---
+  const openWeeks = await prisma.forecast.findMany({
+    where: { mode: "live", horizon: "next_week", scoredAt: null },
+  });
+  if (openWeeks.length) {
+    const metrics = await prisma.dailyMetric.findMany({ where: { netSales: { not: null } } });
+    const byDate = new Map(metrics.map((m) => [iso(m.date), Number(m.netSales)]));
+    for (const fc of openWeeks) {
+      const start = iso(fc.targetDate);
+      const days = Array.from({ length: 7 }, (_, i) => addDaysIso(start, i));
+      if (!days.every((dd) => byDate.has(dd))) continue; // window not complete yet
+      const actualWeek = days.reduce((s, dd) => s + (byDate.get(dd) ?? 0), 0);
+      if (actualWeek === 0) continue;
+      const pred = num(fc.predNetSales);
+      const base = num(fc.baselineNetSales);
+      const err = pred == null ? null : (pred - actualWeek) / actualWeek;
+      await prisma.forecast.update({
+        where: { id: fc.id },
+        data: {
+          actualNetSales: actualWeek,
+          errorPct: err, absErrorPct: err == null ? null : Math.abs(err),
+          baselineErrorPct: base == null ? null : (base - actualWeek) / actualWeek,
+          scoredAt: new Date(),
+        },
+      });
+      scored++;
+    }
+  }
+  return scored;
+}
 
 export interface DailyEntryInput {
   date: string;
@@ -156,6 +227,13 @@ export async function saveDailyEntry(input: DailyEntryInput): Promise<{ ok: bool
   }
 
   await prisma.syncRun.create({ data: { source: "MANUAL", status: "SUCCESS", rowsWritten: rows, finishedAt: new Date(), message: `Daily check-in for ${input.date}` } });
+
+  // Best-effort: score any AI forecasts this day's actuals can now settle.
+  try {
+    await scoreForecasts(input.date);
+  } catch (err) {
+    console.error("Forecast scoring failed (entry still saved):", err);
+  }
 
   return { ok: true, netSales, rows };
 }

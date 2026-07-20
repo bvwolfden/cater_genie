@@ -208,3 +208,35 @@ model Insight {
 
   @@unique([scopeDate, scope])
 }
+
+/// A falsifiable prediction the AI made on a given morning, later scored
+/// against the real number that lands. This closes the COMPILOT-style loop:
+/// the prediction is the "action", the next day's actual is the "measurement",
+/// and `errorPct` is the feedback fed back into future prompts.
+model Forecast {
+  id          Int      @id @default(autoincrement())
+  madeOnDate  DateTime @db.Date // the reporting day it was generated from (as-of)
+  targetDate  DateTime @db.Date // the day (or week-start) being predicted
+  horizon     String   @default("next_day") // next_day | next_week
+  mode        String   @default("live") // live | backtest
+  model       String?
+  context     Json? // snapshot of what the model saw — audit trail / no leakage
+  rationale   String? // why the model expects this
+
+  predNetSales     Decimal? @db.Decimal(14, 2)
+  predLaborPct     Decimal? @db.Decimal(8, 5)
+  baselineNetSales Decimal? @db.Decimal(14, 2) // deterministic projection, for comparison
+
+  // Ground truth, filled in when the actual day closes.
+  actualNetSales Decimal?  @db.Decimal(14, 2)
+  actualLaborPct Decimal?  @db.Decimal(8, 5)
+  errorPct       Decimal?  @db.Decimal(10, 5) // signed (pred-actual)/actual on net sales
+  absErrorPct    Decimal?  @db.Decimal(10, 5)
+  baselineErrorPct Decimal? @db.Decimal(10, 5) // signed error of the deterministic baseline
+  scoredAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([madeOnDate, horizon, mode])
+  @@index([targetDate, horizon, mode])
+}

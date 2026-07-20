@@ -7,6 +7,29 @@ import { channelLabelOf } from "./labels";
 
 export type AlertSeverity = "info" | "warn" | "alert";
 
+/** A falsifiable next-day / next-week prediction the model commits to. */
+export interface ForecastPrediction {
+  targetDate: string; // the next operating day (or week-start) being predicted
+  netSales: number | null;
+  laborPct: number | null;
+  weekNetSales: number | null; // predicted total net sales over the next 7 days
+  rationale: string | null;
+  baselineNetSales: number | null; // deterministic weekday-seasonality projection
+}
+
+/** Track record of past forecasts vs. what actually happened. */
+export interface ForecastAccuracy {
+  n: number; // number of scored forecasts
+  mapePct: number | null; // mean absolute % error of the AI's net-sales calls
+  baselineMapePct: number | null; // same metric for the deterministic baseline
+  last: {
+    targetDate: string;
+    predNetSales: number | null;
+    actualNetSales: number | null;
+    errorPct: number | null;
+  }[];
+}
+
 export interface InsightResult {
   headline: string;
   body: string; // markdown
@@ -14,13 +37,45 @@ export interface InsightResult {
   model: string;
   generatedAt: string;
   cached: boolean;
+  forecast?: ForecastPrediction | null;
+  accuracy?: ForecastAccuracy | null;
 }
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const dowOf = (isoDate: string) => DOW[new Date(`${isoDate}T00:00:00Z`).getUTCDay()];
+const addDays = (isoDate: string, days: number) => {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+const num = (v: unknown): number | null => (v == null ? null : Number(v as never));
+const isoOf = (d: Date) => d.toISOString().slice(0, 10);
+const mean = (a: number[]): number | null => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
+
+/** Compact record the model sees of how its own recent forecasts panned out. */
+type ForecastTrackRecord = {
+  targetDate: string;
+  predicted: number | null;
+  actual: number | null;
+  errorPct: number | null;
+}[];
 
 /** Compact, numeric snapshot handed to the model (or the rules engine). */
-function buildContext(d: Dashboard) {
+function buildContext(d: Dashboard, recentForecasts: ForecastTrackRecord = []) {
   const k = d.kpis;
+  const sd = d.selectedDate;
+  // Last 14 days of actuals, as-of the reporting day — gives the model the
+  // weekday pattern and any recent spikes to forecast the next day from.
+  const recentDays = d.series
+    .filter((s) => s.netSales != null && (!sd || s.date <= sd))
+    .slice(-14)
+    .map((s) => ({
+      date: s.date,
+      dow: dowOf(s.date),
+      netSales: Math.round(s.netSales!),
+      laborPct: s.laborPct,
+    }));
   return {
     latestDate: d.latestDate,
     month: k.monthLabel,
@@ -47,6 +102,7 @@ function buildContext(d: Dashboard) {
       actual: Math.round(c.actual),
       projected: Math.round(c.projected),
     })),
+    recentDays,
     recentWeeks: d.weekly.slice(-6).map((w) => ({
       week: w.weekStart,
       revenue: w.total,
@@ -54,6 +110,8 @@ function buildContext(d: Dashboard) {
       projected: w.projected,
       laborPct: w.laborPct,
     })),
+    // The feedback loop: how your own recent forecasts compared to reality.
+    yourRecentForecasts: recentForecasts,
   };
 }
 
@@ -123,22 +181,32 @@ function rulesEngine(d: Dashboard): InsightResult {
 // ---------------------------------------------------------------------------
 // LLM narrative via Claude.
 // ---------------------------------------------------------------------------
-async function llmInsight(d: Dashboard): Promise<InsightResult> {
+async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = []): Promise<InsightResult> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const ctx = buildContext(d);
+  const ctx = buildContext(d, recentForecasts);
+
+  // Next operating day + the deterministic baseline projection for it, so we
+  // can both prompt and later store the comparison.
+  const targetDate = d.latestDate ? addDays(d.latestDate, 1) : null;
+  const baselineNextDay = d.forwardDays.find((f) => f.date === targetDate)?.netSales ?? d.forwardDays[0]?.netSales ?? null;
 
   const system =
-    "You are the operations analyst for a restaurant/catering company. You read a daily metrics snapshot and produce sharp, specific, numeric insights a GM can act on this morning. Be concise. Prefer concrete numbers and dollar figures over generic advice. Flag real risks: labor % above ~35% of sales, negative cash/operating balances, weeks tracking behind projection. Never invent data not present.";
+    "You are the operations analyst for a restaurant/catering company. You read a daily metrics snapshot and produce sharp, specific, numeric insights a GM can act on this morning. Be concise. Prefer concrete numbers and dollar figures over generic advice. Flag real risks: labor % above ~35% of sales, negative cash/operating balances, weeks tracking behind projection. Never invent data not present.\n\n" +
+    "You must also commit to a falsifiable forecast for the NEXT operating day and the next 7 days. Use the day-of-week pattern in recentDays, recent trend, and — critically — `yourRecentForecasts`, which shows how your own past calls compared to the actuals. Learn from those errors: if you have been consistently high or low, correct. A simple weekday-average baseline is provided; only deviate from it when the data justifies it (e.g. an obvious event spike or a trend).";
 
   const prompt =
     "Here is today's snapshot as JSON:\n\n" +
     JSON.stringify(ctx, null, 2) +
-    '\n\nRespond with ONLY a JSON object (no markdown fences) of shape:\n' +
-    '{ "headline": string (<=90 chars), "body": string (markdown, 3-5 short paragraphs or bullets), "alerts": [{ "severity": "info"|"warn"|"alert", "title": string, "detail": string }] }';
+    `\n\nThe next operating day to forecast is ${targetDate ?? "(unknown)"}. ` +
+    `A naive weekday-average baseline predicts net sales of ${baselineNextDay == null ? "n/a" : Math.round(baselineNextDay)} for that day.\n\n` +
+    'Respond with ONLY a JSON object (no markdown fences) of shape:\n' +
+    '{ "headline": string (<=90 chars), "body": string (markdown, 3-5 short paragraphs or bullets), ' +
+    '"alerts": [{ "severity": "info"|"warn"|"alert", "title": string, "detail": string }], ' +
+    '"forecast": { "nextDayNetSales": number, "nextDayLaborPct": number (fraction, e.g. 0.30), "nextWeekNetSales": number, "rationale": string (<=200 chars) } }';
 
   const res = await client.messages.create({
     model: MODEL,
-    max_tokens: 1200,
+    max_tokens: 1400,
     system,
     messages: [{ role: "user", content: prompt }],
   });
@@ -149,13 +217,29 @@ async function llmInsight(d: Dashboard): Promise<InsightResult> {
     .join("\n")
     .trim();
 
-  let parsed: Partial<InsightResult> = {};
+  type Parsed = Partial<InsightResult> & {
+    forecast?: { nextDayNetSales?: number; nextDayLaborPct?: number; nextWeekNetSales?: number; rationale?: string };
+  };
+  let parsed: Parsed = {};
   try {
     const clean = text.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
     parsed = JSON.parse(clean);
   } catch {
     parsed = { headline: "Daily insights", body: text, alerts: [] };
   }
+
+  const f = parsed.forecast;
+  const forecast: ForecastPrediction | null =
+    targetDate && f
+      ? {
+          targetDate,
+          netSales: num(f.nextDayNetSales),
+          laborPct: num(f.nextDayLaborPct),
+          weekNetSales: num(f.nextWeekNetSales),
+          rationale: f.rationale ?? null,
+          baselineNetSales: baselineNextDay,
+        }
+      : null;
 
   return {
     headline: parsed.headline || "Daily insights",
@@ -164,6 +248,94 @@ async function llmInsight(d: Dashboard): Promise<InsightResult> {
     model: MODEL,
     generatedAt: new Date().toISOString(),
     cached: false,
+    forecast,
+    accuracy: null,
+  };
+}
+
+/**
+ * Load the model's own forecast track record (scored live next-day calls) plus
+ * the aggregate accuracy. This is the empirical feedback the loop runs on.
+ */
+async function loadForecastFeedback(): Promise<{ trackRecord: ForecastTrackRecord; accuracy: ForecastAccuracy }> {
+  const rows = await prisma.forecast.findMany({
+    where: { mode: "live", horizon: "next_day", scoredAt: { not: null } },
+    orderBy: { targetDate: "desc" },
+    take: 10,
+  });
+  const absVals = rows.map((r) => num(r.absErrorPct)).filter((v): v is number => v != null);
+  const baseAbs = rows
+    .map((r) => (r.baselineErrorPct == null ? null : Math.abs(Number(r.baselineErrorPct))))
+    .filter((v): v is number => v != null);
+  const trackRecord: ForecastTrackRecord = rows.slice(0, 7).map((r) => ({
+    targetDate: isoOf(r.targetDate),
+    predicted: num(r.predNetSales),
+    actual: num(r.actualNetSales),
+    errorPct: num(r.errorPct),
+  }));
+  return {
+    trackRecord,
+    accuracy: {
+      n: rows.length,
+      mapePct: mean(absVals),
+      baselineMapePct: mean(baseAbs),
+      last: trackRecord.map((t) => ({
+        targetDate: t.targetDate,
+        predNetSales: t.predicted,
+        actualNetSales: t.actual,
+        errorPct: t.errorPct,
+      })),
+    },
+  };
+}
+
+/** Persist the live next-day & next-week forecasts so they can be scored later. */
+async function persistForecast(scopeDate: Date, forecast: ForecastPrediction, d: Dashboard, model: string) {
+  const targetDate = new Date(`${forecast.targetDate}T00:00:00Z`);
+  const ctx = buildContext(d) as unknown as object; // audit snapshot of the inputs
+  const baselineWeek = d.forwardDays.slice(0, 7).reduce<number | null>(
+    (s, f) => (f.netSales == null ? s : (s ?? 0) + f.netSales), null);
+
+  await prisma.forecast.upsert({
+    where: { madeOnDate_horizon_mode: { madeOnDate: scopeDate, horizon: "next_day", mode: "live" } },
+    create: {
+      madeOnDate: scopeDate, targetDate, horizon: "next_day", mode: "live", model,
+      predNetSales: forecast.netSales, predLaborPct: forecast.laborPct,
+      baselineNetSales: forecast.baselineNetSales, rationale: forecast.rationale, context: ctx,
+    },
+    update: {
+      targetDate, model, predNetSales: forecast.netSales, predLaborPct: forecast.laborPct,
+      baselineNetSales: forecast.baselineNetSales, rationale: forecast.rationale, context: ctx,
+      actualNetSales: null, actualLaborPct: null, errorPct: null, absErrorPct: null, baselineErrorPct: null, scoredAt: null,
+    },
+  });
+  await prisma.forecast.upsert({
+    where: { madeOnDate_horizon_mode: { madeOnDate: scopeDate, horizon: "next_week", mode: "live" } },
+    create: {
+      madeOnDate: scopeDate, targetDate, horizon: "next_week", mode: "live", model,
+      predNetSales: forecast.weekNetSales, baselineNetSales: baselineWeek, rationale: forecast.rationale, context: ctx,
+    },
+    update: {
+      targetDate, model, predNetSales: forecast.weekNetSales, baselineNetSales: baselineWeek, rationale: forecast.rationale, context: ctx,
+      actualNetSales: null, errorPct: null, absErrorPct: null, baselineErrorPct: null, scoredAt: null,
+    },
+  });
+}
+
+/** Reconstruct the stored forecast for a reporting day (used on cache hits). */
+async function loadStoredForecast(scopeDate: Date): Promise<ForecastPrediction | null> {
+  const [day, week] = await Promise.all([
+    prisma.forecast.findUnique({ where: { madeOnDate_horizon_mode: { madeOnDate: scopeDate, horizon: "next_day", mode: "live" } } }),
+    prisma.forecast.findUnique({ where: { madeOnDate_horizon_mode: { madeOnDate: scopeDate, horizon: "next_week", mode: "live" } } }),
+  ]);
+  if (!day) return null;
+  return {
+    targetDate: isoOf(day.targetDate),
+    netSales: num(day.predNetSales),
+    laborPct: num(day.predLaborPct),
+    weekNetSales: num(week?.predNetSales),
+    rationale: day.rationale,
+    baselineNetSales: num(day.baselineNetSales),
   };
 }
 
@@ -171,9 +343,12 @@ async function llmInsight(d: Dashboard): Promise<InsightResult> {
 export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): Promise<InsightResult> {
   const scopeISO = d.selectedDate ?? d.latestDate;
   const scopeDate = scopeISO ? new Date(`${scopeISO}T00:00:00Z`) : null;
+  const isLive = scopeISO != null && scopeISO === d.latestDate;
   const k = d.kpis;
   // Signature so the cache auto-invalidates when the day's numbers change.
   const sig = `${scopeISO}|${Math.round(k.netSales ?? 0)}|${Math.round(k.laborCost ?? 0)}|${Math.round(k.cashPosition ?? 0)}`;
+
+  const feedback = await loadForecastFeedback();
 
   if (scopeDate && !opts.force) {
     const cached = await prisma.insight.findUnique({
@@ -188,6 +363,8 @@ export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): 
         model: cached.model || "cache",
         generatedAt: cached.createdAt.toISOString(),
         cached: true,
+        forecast: isLive ? await loadStoredForecast(scopeDate) : null,
+        accuracy: feedback.accuracy,
       };
     }
   }
@@ -195,13 +372,14 @@ export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): 
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
   let result: InsightResult;
   try {
-    result = hasKey ? await llmInsight(d) : rulesEngine(d);
+    result = hasKey ? await llmInsight(d, feedback.trackRecord) : rulesEngine(d);
   } catch (err) {
     // Fall back gracefully if the API call fails.
     result = rulesEngine(d);
     result.headline = result.headline + " (fallback)";
     console.error("AI insight failed, used rules engine:", err);
   }
+  result.accuracy = feedback.accuracy;
 
   if (scopeDate) {
     await prisma.insight.upsert({
@@ -222,6 +400,11 @@ export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): 
         createdAt: new Date(),
       },
     });
+  }
+
+  // Close the loop: store the live forecast so the next day's check-in can score it.
+  if (isLive && scopeDate && result.forecast) {
+    await persistForecast(scopeDate, result.forecast, d, result.model);
   }
 
   return result;
