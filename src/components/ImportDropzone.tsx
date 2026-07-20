@@ -30,10 +30,14 @@ const statusStyle: Record<string, string> = {
   FAILED: "bg-rose/10 text-rose border-rose/30",
 };
 
+const PREVIEW_LIMIT = 40;
+
 function PreviewTable({ rows, cols }: { rows: Record<string, unknown>[]; cols: { key: string; label: string; money?: boolean }[] }) {
+  const [expanded, setExpanded] = useState(false);
   if (!rows.length) return null;
+  const visible = expanded ? rows : rows.slice(0, PREVIEW_LIMIT);
   return (
-    <div className="overflow-x-auto">
+    <div className={cn("overflow-x-auto", expanded && "max-h-[28rem] overflow-y-auto")}>
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-line text-left text-[10px] uppercase tracking-wide text-ink-3">
@@ -43,7 +47,7 @@ function PreviewTable({ rows, cols }: { rows: Record<string, unknown>[]; cols: {
           </tr>
         </thead>
         <tbody>
-          {rows.slice(0, 40).map((r, i) => (
+          {visible.map((r, i) => (
             <tr key={i} className="border-b border-line/50 text-ink-2">
               {cols.map((c) => (
                 <td key={c.key} className="px-2 py-1">
@@ -54,7 +58,14 @@ function PreviewTable({ rows, cols }: { rows: Record<string, unknown>[]; cols: {
           ))}
         </tbody>
       </table>
-      {rows.length > 40 && <div className="px-2 py-1 text-[10px] text-ink-3">…and {rows.length - 40} more rows</div>}
+      {rows.length > PREVIEW_LIMIT && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full px-2 py-1.5 text-left text-[10px] font-medium text-brand transition hover:bg-brand/5"
+        >
+          {expanded ? "Collapse" : `Show all ${rows.length} rows (${rows.length - PREVIEW_LIMIT} more)`}
+        </button>
+      )}
     </div>
   );
 }
