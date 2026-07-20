@@ -45,7 +45,7 @@ export interface ConnectorStatus {
   /** What we'd do to make it live — surfaced on the dashboard. */
   readiness: string;
   /** The chosen integration mechanism from discovery. */
-  method: "rest-api" | "scheduled-report" | "oauth-rest" | "manual";
+  method: "rest-api" | "scheduled-report" | "oauth-rest" | "portal-export" | "manual";
 }
 
 /** Raised when a connector can't pull because access isn't wired up yet. */

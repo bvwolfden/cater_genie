@@ -326,11 +326,27 @@ export async function commitImportBatch(id: number): Promise<{ ok: boolean; rows
 
   let rows = 0;
 
-  // Daily rows reuse the walkthrough's save path — including forecast scoring,
-  // so an imported day closes the AI feedback loop exactly like a manual one.
-  for (const day of parsed.days ?? []) {
-    const r = await saveDailyEntry(day);
-    rows += r.rows;
+  if (batch.kind === "catertrax_sales") {
+    // Channel-only feed: write the CATERTRAX line in DailySales WITHOUT touching
+    // DailyMetric.netSales (Kevin's sheet total already includes all channels;
+    // routing this through saveDailyEntry would clobber the day's real total).
+    for (const day of parsed.days ?? []) {
+      const amt = day.cateringSales ?? day.netSalesTotal;
+      if (amt == null) continue;
+      await prisma.dailySales.upsert({
+        where: { date_channel: { date: new Date(`${day.date}T00:00:00Z`), channel: "CATERTRAX" } },
+        create: { date: new Date(`${day.date}T00:00:00Z`), channel: "CATERTRAX", netSales: amt, source: "CATERTRAX" },
+        update: { netSales: amt, source: "CATERTRAX" },
+      });
+      rows++;
+    }
+  } else {
+    // Daily rows reuse the walkthrough's save path — including forecast scoring,
+    // so an imported day closes the AI feedback loop exactly like a manual one.
+    for (const day of parsed.days ?? []) {
+      const r = await saveDailyEntry(day);
+      rows += r.rows;
+    }
   }
 
   // Labor: replace-then-insert per date so re-imports don't duplicate.
