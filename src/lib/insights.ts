@@ -1,5 +1,6 @@
 import "server-only";
 import { llmComplete, hasLlmKey } from "./llm";
+import { getDataQuality } from "./quality";
 import { prisma } from "./db";
 import type { Dashboard } from "./dashboard";
 import { money, percent } from "./format";
@@ -111,6 +112,8 @@ function buildContext(d: Dashboard, recentForecasts: ForecastTrackRecord = []) {
     })),
     // The feedback loop: how your own recent forecasts compared to reality.
     yourRecentForecasts: recentForecasts,
+    // Days whose numbers look inconsistent or unusual (cross-source checks).
+    dataQualityFlags: [] as { date: string; title: string; detail: string }[],
   };
 }
 
@@ -182,6 +185,12 @@ function rulesEngine(d: Dashboard): InsightResult {
 // ---------------------------------------------------------------------------
 async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = []): Promise<InsightResult> {
   const ctx = buildContext(d, recentForecasts);
+  try {
+    const q = await getDataQuality();
+    ctx.dataQualityFlags = q.flags.map((f) => ({ date: f.date, title: f.title, detail: f.detail }));
+  } catch {
+    // quality checks are advisory — never block the insight
+  }
 
   // Next operating day + the deterministic baseline projection for it, so we
   // can both prompt and later store the comparison.
@@ -190,7 +199,8 @@ async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = [
 
   const system =
     "You are the operations analyst for a restaurant/catering company. You read a daily metrics snapshot and produce sharp, specific, numeric insights a GM can act on this morning. Be concise. Prefer concrete numbers and dollar figures over generic advice. Flag real risks: labor % above ~35% of sales, negative cash/operating balances, weeks tracking behind projection. Never invent data not present.\n\n" +
-    "You must also commit to a falsifiable forecast for the NEXT operating day and the next 7 days. Use the day-of-week pattern in recentDays, recent trend, and — critically — `yourRecentForecasts`, which shows how your own past calls compared to the actuals. Learn from those errors: if you have been consistently high or low, correct. A simple weekday-average baseline is provided; only deviate from it when the data justifies it (e.g. an obvious event spike or a trend).";
+    "You must also commit to a falsifiable forecast for the NEXT operating day and the next 7 days. Use the day-of-week pattern in recentDays, recent trend, and — critically — `yourRecentForecasts`, which shows how your own past calls compared to the actuals. Learn from those errors: if you have been consistently high or low, correct. A simple weekday-average baseline is provided; only deviate from it when the data justifies it (e.g. an obvious event spike or a trend).\n\n" +
+    "`dataQualityFlags` lists days whose numbers look inconsistent across sources or unusual. Treat those figures skeptically: do not build conclusions on a flagged number without noting the doubt, and if a flagged day matters to your analysis, say so plainly (e.g. 'if Tuesday's entry is right, ...'). The data comes from manual entry — part of your job is catching human mistakes, not laundering them into confident narrative.";
 
   const prompt =
     "Here is today's snapshot as JSON:\n\n" +

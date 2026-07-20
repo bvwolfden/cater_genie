@@ -1,5 +1,7 @@
 import { getDashboard, getPulse } from "@/lib/dashboard";
 import { getInsight } from "@/lib/insights";
+import { getDataQuality } from "@/lib/quality";
+import { DataQualityPanel } from "@/components/DataQualityPanel";
 import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
 import { DatePicker } from "@/components/DatePicker";
@@ -28,9 +30,10 @@ export default async function Page({
   searchParams: Promise<{ date?: string; from?: string; to?: string; qbo?: string }>;
 }) {
   const { date, from, to, qbo } = await searchParams;
-  const [data, pulse] = await Promise.all([
+  const [data, pulse, quality] = await Promise.all([
     getDashboard({ date, from, to }),
     getPulse(),
+    getDataQuality(),
   ]);
   const insight = await getInsight(data);
 
@@ -134,6 +137,7 @@ export default async function Page({
         {/* Right / rail */}
         <div className="space-y-4">
           <InsightsPanel initial={insight} />
+          <DataQualityPanel quality={quality} />
           <Balances data={data} />
           <Sources data={data} />
         </div>
