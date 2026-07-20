@@ -209,6 +209,39 @@ model Insight {
   @@unique([scopeDate, scope])
 }
 
+/// A file dropped/uploaded for AI-parsed ingestion (the "drop zone").
+/// Parsed rows wait here for human review before committing to the real tables —
+/// numbers never pass through human fingers, but a human still approves them.
+model ImportBatch {
+  id          Int       @id @default(autoincrement())
+  filename    String
+  kind        String? // detected: daily_metrics | timesheet | catertrax_sales | caterease_bookings | unknown
+  status      String    @default("PENDING") // PENDING | COMMITTED | REJECTED | FAILED
+  summary     String? // parser's one-line description of what it found
+  parsed      Json? // structured rows awaiting review
+  error       String?
+  rowsWritten Int       @default(0)
+  createdAt   DateTime  @default(now())
+  committedAt DateTime?
+}
+
+/// Forward event bookings (Caterease exports / manual). The missing input the
+/// June forecast backtest identified: event days run ~7x a normal day.
+model EventBooking {
+  id        Int          @id @default(autoincrement())
+  eventDate DateTime     @db.Date
+  name      String?
+  status    String? // definite | tentative | prospect...
+  guests    Int?
+  revenue   Decimal?     @db.Decimal(14, 2)
+  source    SourceSystem @default(MANUAL)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([eventDate, name])
+  @@index([eventDate])
+}
+
 /// A falsifiable prediction the AI made on a given morning, later scored
 /// against the real number that lands. This closes the COMPILOT-style loop:
 /// the prediction is the "action", the next day's actual is the "measurement",

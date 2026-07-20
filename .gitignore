@@ -24,6 +24,7 @@ next-env.d.ts
 # Repo is public; the spreadsheets + their screenshot stay local only.
 *.xlsx
 /docs/dashboard.png
+/docs/kevin
 /drop
 
 # typescript incremental build state
