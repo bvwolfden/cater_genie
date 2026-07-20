@@ -120,7 +120,7 @@ function mergeDays(days: ParsedDay[]): ParsedDay[] {
       if (d[f] != null) cur[f] = (cur[f] ?? 0) + d[f]!;
     }
     for (const f of SNAP_FIELDS) {
-      if (d[f] != null) (cur as Record<string, unknown>)[f] = d[f];
+      if (d[f] != null) (cur as unknown as Record<string, unknown>)[f] = d[f];
     }
   }
   return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
