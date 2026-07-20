@@ -93,6 +93,7 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
                 rows={days}
                 cols={[
                   { key: "date", label: "Date" },
+                  { key: "netSalesTotal", label: "Net Total", money: true },
                   { key: "cafeSales", label: "Cafe", money: true },
                   { key: "cateringSales", label: "CaterTrax", money: true },
                   { key: "eventsSales", label: "Events", money: true },

@@ -81,6 +81,8 @@ export interface DailyEntryInput {
   cafeSales?: number | null;
   cateringSales?: number | null;
   eventsSales?: number | null;
+  /** Total net sales when the source has no channel split (e.g. Daily Tracker). */
+  netSalesTotal?: number | null;
   tax?: number | null;
   laborHours?: number | null;
   laborCost?: number | null;
@@ -183,7 +185,7 @@ export async function saveDailyEntry(input: DailyEntryInput): Promise<{ ok: bool
     ["CATEREASE", input.eventsSales],
   ];
   const provided = channels.map(([, v]) => v).filter((v): v is number => v != null);
-  const netSales = provided.length ? provided.reduce((s, v) => s + v, 0) : null;
+  const netSales = provided.length ? provided.reduce((s, v) => s + v, 0) : input.netSalesTotal ?? null;
   const laborCost = input.laborCost ?? null;
   const laborPct = netSales && laborCost != null ? laborCost / netSales : null;
 
