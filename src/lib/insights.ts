@@ -1,5 +1,5 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import { llmComplete, hasLlmKey } from "./llm";
 import { prisma } from "./db";
 import type { Dashboard } from "./dashboard";
 import { money, percent } from "./format";
@@ -41,7 +41,6 @@ export interface InsightResult {
   accuracy?: ForecastAccuracy | null;
 }
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const dowOf = (isoDate: string) => DOW[new Date(`${isoDate}T00:00:00Z`).getUTCDay()];
 const addDays = (isoDate: string, days: number) => {
@@ -182,7 +181,6 @@ function rulesEngine(d: Dashboard): InsightResult {
 // LLM narrative via Claude.
 // ---------------------------------------------------------------------------
 async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = []): Promise<InsightResult> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const ctx = buildContext(d, recentForecasts);
 
   // Next operating day + the deterministic baseline projection for it, so we
@@ -204,18 +202,11 @@ async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = [
     '"alerts": [{ "severity": "info"|"warn"|"alert", "title": string, "detail": string }], ' +
     '"forecast": { "nextDayNetSales": number, "nextDayLaborPct": number (fraction, e.g. 0.30), "nextWeekNetSales": number, "rationale": string (<=200 chars) } }';
 
-  const res = await client.messages.create({
-    model: MODEL,
-    max_tokens: 1400,
+  const { text, model } = await llmComplete({
     system,
-    messages: [{ role: "user", content: prompt }],
+    parts: [{ type: "text", text: prompt }],
+    maxTokens: 1400,
   });
-
-  const text = res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
 
   type Parsed = Partial<InsightResult> & {
     forecast?: { nextDayNetSales?: number; nextDayLaborPct?: number; nextWeekNetSales?: number; rationale?: string };
@@ -245,7 +236,7 @@ async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = [
     headline: parsed.headline || "Daily insights",
     body: parsed.body || "",
     alerts: Array.isArray(parsed.alerts) ? parsed.alerts : [],
-    model: MODEL,
+    model,
     generatedAt: new Date().toISOString(),
     cached: false,
     forecast,
@@ -369,7 +360,7 @@ export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): 
     }
   }
 
-  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
+  const hasKey = hasLlmKey();
   let result: InsightResult;
   try {
     result = hasKey ? await llmInsight(d, feedback.trackRecord) : rulesEngine(d);

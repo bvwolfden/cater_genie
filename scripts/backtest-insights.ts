@@ -17,11 +17,10 @@
  */
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import Anthropic from "@anthropic-ai/sdk";
+import { llmComplete, llmModelName, hasLlmKey } from "../src/lib/llm";
 
 const prisma = new PrismaClient();
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const MODEL = llmModelName();
 
 const START = process.env.BACKTEST_START || "2026-06-01";
 
@@ -55,12 +54,7 @@ async function ask(ctx: unknown, targetDate: string, baselineNet: number | null)
     `\n\nForecast the next operating day ${targetDate} (${dowOf(targetDate)}). ` +
     `A naive weekday-average baseline predicts ${baselineNet == null ? "n/a" : Math.round(baselineNet)} net sales.\n\n` +
     'Respond with ONLY this JSON (no fences): { "nextDayNetSales": number, "nextDayLaborPct": number, "nextWeekNetSales": number, "rationale": string (<=160 chars) }';
-  const res = await client.messages.create({ model: MODEL, max_tokens: 600, system: SYSTEM, messages: [{ role: "user", content: prompt }] });
-  const text = res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
+  const { text } = await llmComplete({ system: SYSTEM, parts: [{ type: "text", text: prompt }], maxTokens: 600 });
   try {
     const clean = text.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
     const j = JSON.parse(clean);
@@ -71,7 +65,7 @@ async function ask(ctx: unknown, targetDate: string, baselineNet: number | null)
 }
 
 async function main() {
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not set");
+  if (!hasLlmKey()) throw new Error("No API key for the active LLM provider (set ANTHROPIC_API_KEY or OPENAI_API_KEY / LLM_PROVIDER)");
 
   const metricsRaw = await prisma.dailyMetric.findMany({ orderBy: { date: "asc" } });
   const days: Day[] = metricsRaw.map((m) => ({

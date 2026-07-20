@@ -76,7 +76,7 @@ export function InsightsPanel({ initial }: { initial: Insight }) {
     }
   }
 
-  const isLLM = insight.model.startsWith("claude");
+  const isLLM = insight.model !== "rules-engine" && insight.model !== "cache";
   const acc = insight.accuracy;
   const fc = {
     accChip:
@@ -98,7 +98,7 @@ export function InsightsPanel({ initial }: { initial: Insight }) {
             <div>
               <div className="text-sm font-semibold text-ink">AI Insights</div>
               <div className="text-[11px] text-ink-3">
-                {isLLM ? `Claude · ${insight.model}` : "Rules engine (set ANTHROPIC_API_KEY for LLM)"}
+                {isLLM ? `AI · ${insight.model}` : "Rules engine (set an LLM API key)"}
               </div>
             </div>
           </div>

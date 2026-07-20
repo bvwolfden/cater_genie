@@ -1,5 +1,5 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import { llmComplete, type LlmPart } from "./llm";
 import * as XLSX from "xlsx";
 import { prisma } from "./db";
 import { saveDailyEntry, type DailyEntryInput } from "./entry";
@@ -9,7 +9,6 @@ import { saveDailyEntry, type DailyEntryInput } from "./entry";
 // the rows wait in ImportBatch for review, then commit into the same tables the
 // manual walkthrough writes. Numbers never get re-typed by hand.
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 const MAX_TEXT = 60_000; // cap sheet text sent to the model
 
 export interface ParsedDay extends DailyEntryInput {}
@@ -53,7 +52,7 @@ Respond with ONLY a JSON object (no markdown fences):
   "labor": [{ "date": string, "firstName"?: string, "lastName"?: string, "department"?: string, "position"?: string, "regularHours"?: number, "otHours"?: number, "hourlyRate"?: number, "paidTotal"?: number }],
   "bookings": [{ "eventDate": string, "name"?: string, "status"?: string, "guests"?: number, "revenue"?: number }]
 }
-Use "days" for daily sales/metrics reports (one row per calendar day; a CaterTrax daily sales report becomes days rows with cateringSales). Use "labor" for timesheet exports. Use "bookings" for event/bookings exports. Leave unused arrays empty.`;
+Use "days" for daily sales/metrics reports (a CaterTrax daily sales report becomes days rows with cateringSales). IMPORTANT: "days" must contain exactly ONE row per calendar date — if the file lists multiple orders/line items on the same day, SUM them into that day's row. Use "labor" for timesheet exports. Use "bookings" for event/bookings exports. Leave unused arrays empty.`;
 
 /** Convert a spreadsheet buffer into readable CSV text (all sheets). */
 function sheetToText(buf: Buffer): string {
@@ -66,41 +65,30 @@ function sheetToText(buf: Buffer): string {
   return parts.join("\n\n").slice(0, MAX_TEXT);
 }
 
-/** Parse an uploaded file into structured rows via Claude. */
+/** Parse an uploaded file into structured rows via the configured LLM. */
 export async function parseImportFile(filename: string, buf: Buffer, mime: string): Promise<ParsedImport> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const lower = filename.toLowerCase();
 
-  let content: Anthropic.MessageParam["content"];
+  let parts: LlmPart[];
   if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv") || mime.includes("spreadsheet") || mime.includes("csv")) {
     const text = lower.endsWith(".csv") ? buf.toString("utf8").slice(0, MAX_TEXT) : sheetToText(buf);
-    content = [{ type: "text", text: `File: ${filename}\n\n${text}` }];
+    parts = [{ type: "text", text: `File: ${filename}\n\n${text}` }];
   } else if (lower.endsWith(".pdf") || mime === "application/pdf") {
-    content = [
-      { type: "document", source: { type: "base64", media_type: "application/pdf", data: buf.toString("base64") } },
+    parts = [
+      { type: "pdf", filename, base64: buf.toString("base64") },
       { type: "text", text: `File: ${filename}. Extract per the system instructions.` },
     ];
   } else if (mime.startsWith("image/")) {
-    content = [
-      { type: "image", source: { type: "base64", media_type: mime as "image/png", data: buf.toString("base64") } },
+    parts = [
+      { type: "image", mediaType: mime, base64: buf.toString("base64") },
       { type: "text", text: `File: ${filename}. Extract per the system instructions.` },
     ];
   } else {
     // Fall back to treating it as text (e.g. .txt/.tsv exports).
-    content = [{ type: "text", text: `File: ${filename}\n\n${buf.toString("utf8").slice(0, MAX_TEXT)}` }];
+    parts = [{ type: "text", text: `File: ${filename}\n\n${buf.toString("utf8").slice(0, MAX_TEXT)}` }];
   }
 
-  const res = await client.messages.create({
-    model: MODEL,
-    max_tokens: 16_000,
-    system: SYSTEM,
-    messages: [{ role: "user", content }],
-  });
-  const text = res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
+  const { text } = await llmComplete({ system: SYSTEM, parts, maxTokens: 16_000 });
   const clean = text.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
   const j = JSON.parse(clean) as Partial<ParsedImport>;
 
@@ -108,10 +96,34 @@ export async function parseImportFile(filename: string, buf: Buffer, mime: strin
   return {
     kind: typeof j.kind === "string" ? j.kind : "unknown",
     summary: typeof j.summary === "string" ? j.summary : "Parsed file",
-    days: (Array.isArray(j.days) ? j.days : []).filter((d) => isDate(d?.date)),
+    days: mergeDays((Array.isArray(j.days) ? j.days : []).filter((d) => isDate(d?.date))),
     labor: (Array.isArray(j.labor) ? j.labor : []).filter((l) => isDate(l?.date)),
     bookings: (Array.isArray(j.bookings) ? j.bookings : []).filter((b) => isDate(b?.eventDate)),
   };
+}
+
+// Defensive: commits upsert one row per date, so duplicate dates (e.g. an
+// orders report with several orders per day) would silently overwrite each
+// other. Sum flow fields; keep the last snapshot for balances.
+const SUM_FIELDS = ["cafeSales", "cateringSales", "eventsSales", "tax", "laborHours", "laborCost", "foodPurchases"] as const;
+const SNAP_FIELDS = ["operating", "payroll", "merchant", "savings", "holding", "ccProcessing", "notes"] as const;
+
+function mergeDays(days: ParsedDay[]): ParsedDay[] {
+  const byDate = new Map<string, ParsedDay>();
+  for (const d of days) {
+    const cur = byDate.get(d.date);
+    if (!cur) {
+      byDate.set(d.date, { ...d });
+      continue;
+    }
+    for (const f of SUM_FIELDS) {
+      if (d[f] != null) cur[f] = (cur[f] ?? 0) + d[f]!;
+    }
+    for (const f of SNAP_FIELDS) {
+      if (d[f] != null) (cur as Record<string, unknown>)[f] = d[f];
+    }
+  }
+  return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
 /** Create a pending batch from an uploaded file. */
