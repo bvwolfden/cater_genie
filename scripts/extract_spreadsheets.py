@@ -16,8 +16,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "prisma", "seed-data")
 os.makedirs(OUT, exist_ok=True)
 
+import glob as _glob
+
 DAILY_XLSX = os.path.join(ROOT, "Daily Dash Board Online.xlsx")
-TIMESHEET_XLSX = os.path.join(ROOT, "Timesheets - Jun 15 - Jun 21, 2026 (2).xlsx")
+# Timesheet exports carry their date range in the filename — take the newest.
+_timesheets = sorted(_glob.glob(os.path.join(ROOT, "Timesheets*.xlsx")), key=os.path.getmtime)
+TIMESHEET_XLSX = _timesheets[-1] if _timesheets else os.path.join(ROOT, "Timesheets.xlsx")
 COMP_XLSX = os.path.join(ROOT, "Weekly Sales Comp 25_26.xlsx")
 PROJ_XLSX = os.path.join(ROOT, "weekly projections 2026.xlsx")
 
@@ -123,10 +127,25 @@ def write(name, rows):
 # ---------------------------------------------------------------------------
 # 1. Daily Tracker -> daily_metrics + account_balances
 # ---------------------------------------------------------------------------
+def find_header_row(ws, *needles, scan_rows=6):
+    """Locate the header row: the first row whose cells contain all needles."""
+    for r in range(1, min(scan_rows, ws.max_row) + 1):
+        joined = " ".join(
+            str(ws.cell(row=r, column=c).value or "").strip().lower()
+            for c in range(1, ws.max_column + 1)
+        )
+        if all(n in joined for n in needles):
+            return r
+    return 1
+
+
 def extract_daily():
     wb = load_workbook(DAILY_XLSX, data_only=True)
     ws = wb["Daily Tracker (2)"]
-    h = header_map(ws)
+    # Kevin's live sheet moved the header to row 2 (a data row sits above it),
+    # so find it instead of assuming row 1.
+    hrow = find_header_row(ws, "date", "net sale")
+    h = header_map(ws, header_row=hrow)
 
     c_week = find_col(h, "week")
     c_date = find_col(h, "date")
@@ -148,7 +167,9 @@ def extract_daily():
     }
 
     metrics, balances = [], []
-    for r in range(2, ws.max_row + 1):
+    for r in range(1, ws.max_row + 1):
+        if r == hrow:
+            continue
         date = as_date(ws.cell(row=r, column=c_date).value) if c_date else None
         if not date:
             continue
@@ -192,10 +213,31 @@ def extract_daily():
 # ---------------------------------------------------------------------------
 # 2. Timesheets -> labor_entries
 # ---------------------------------------------------------------------------
+# Non-data sheets in the per-schedule timesheet export.
+LABOR_SKIP_SHEETS = re.compile(r"summary|breaks", re.I)
+
+
 def extract_labor():
     wb = load_workbook(TIMESHEET_XLSX, data_only=True)
-    ws = wb["Entries"]
+    # Old exports: one "Entries" sheet with a Schedule column.
+    # New exports: one sheet per schedule/department, same columns otherwise.
+    if "Entries" in wb.sheetnames:
+        sheets = [("Entries", wb["Entries"])]
+    else:
+        sheets = [
+            (name, wb[name]) for name in wb.sheetnames if not LABOR_SKIP_SHEETS.search(name)
+        ]
+
+    rows = []
+    for sheet_name, ws in sheets:
+        _extract_labor_sheet(ws, sheet_name, rows)
+    write("labor_entries.json", rows)
+
+
+def _extract_labor_sheet(ws, sheet_name, rows):
     h = header_map(ws)
+    if not find_col(h, "first") or not find_col(h, "date"):
+        return  # not a timesheet grid
 
     c = {
         "first": find_col(h, "first"),
@@ -219,17 +261,22 @@ def extract_labor():
         if key == "ot":
             c_ot = col
 
-    rows = []
     for r in range(2, ws.max_row + 1):
         date = as_date(ws.cell(row=r, column=c["date"]).value) if c["date"] else None
         if not date:
             continue
+        # Old format: department from the Schedule column; new: the sheet name.
+        dept = (
+            text(ws.cell(row=r, column=c["sched"]).value)
+            if c["sched"]
+            else (sheet_name if sheet_name != "Entries" else None)
+        )
         rows.append({
             "date": date,
             "firstName": text(ws.cell(row=r, column=c["first"]).value) if c["first"] else None,
             "lastName": text(ws.cell(row=r, column=c["last"]).value) if c["last"] else None,
             "employeeId": text(ws.cell(row=r, column=c["eid"]).value) if c["eid"] else None,
-            "department": text(ws.cell(row=r, column=c["sched"]).value) if c["sched"] else None,
+            "department": dept,
             "position": text(ws.cell(row=r, column=c["pos"]).value) if c["pos"] else None,
             "jobSite": text(ws.cell(row=r, column=c["site"]).value) if c["site"] else None,
             "regularHours": num(ws.cell(row=r, column=c["regular"]).value) if c["regular"] else None,
@@ -240,7 +287,6 @@ def extract_labor():
             "tips": num(ws.cell(row=r, column=c["tips"]).value) if c["tips"] else None,
             "earningsTotal": num(ws.cell(row=r, column=c["earn"]).value) if c["earn"] else None,
         })
-    write("labor_entries.json", rows)
 
 
 # ---------------------------------------------------------------------------
