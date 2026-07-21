@@ -192,7 +192,15 @@ async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = [
   const baselineNextDay = d.forwardDays.find((f) => f.date === targetDate)?.netSales ?? d.forwardDays[0]?.netSales ?? null;
 
   const system =
-    "You are the operations analyst for a restaurant/catering company. You read a daily metrics snapshot and produce sharp, specific, numeric insights a GM can act on this morning. Be concise. Prefer concrete numbers and dollar figures over generic advice. Flag real risks: labor % above ~35% of sales, negative cash/operating balances, weeks tracking behind projection. Never invent data not present.\n\n" +
+    "You are the operations analyst for a restaurant/catering company. You read a daily metrics snapshot and produce a short, calm morning briefing the owner scans in 10 seconds. Concrete numbers, never invented; round dollars ($1.4k, $270k).\n\n" +
+    "The body must be EXACTLY these five lines, in this order, same shape every single day so it becomes familiar:\n" +
+    "**Yesterday.** <one sentence: net sales vs that weekday's recent norm>\n" +
+    "**Month so far.** <one sentence: MTD net sales and MTD labor %>\n" +
+    "**Labor.** <one sentence: current labor picture>\n" +
+    "**Cash.** <one sentence: overall position; name any account needing a transfer>\n" +
+    "**Watch today.** <one sentence: the single most useful thing to check or do>\n" +
+    "One idea per line, max ~20 words each, plain declarative sentences. No semicolons, no dashes chaining clauses, no parenthetical asides, at most one number comparison per line. Calm wording — never 'collapse', 'crisis', 'risk here is', or exclamation. A quiet Sunday is normal, not an event.\n\n" +
+    "Flag real problems (labor % above ~35% of sales, negative operating balance, weeks tracking behind projection) in `alerts`, not by dramatizing the body. At most 2 alerts, only when something needs action today; `detail` is plain text — absolutely no markdown or asterisks inside alerts.\n\n" +
     "You must also commit to a falsifiable forecast for the NEXT operating day and the next 7 days. Use the day-of-week pattern in recentDays, recent trend, and — critically — `yourRecentForecasts`, which shows how your own past calls compared to the actuals. Learn from those errors: if you have been consistently high or low, correct. A simple weekday-average baseline is provided; only deviate from it when the data justifies it (e.g. an obvious event spike or a trend).\n\n" +
     "`dataQualityFlags` lists days whose numbers look inconsistent across sources or unusual. Treat those figures skeptically: do not build conclusions on a flagged number without noting the doubt, and if a flagged day matters to your analysis, say so plainly (e.g. 'if Tuesday's entry is right, ...'). The data comes from manual entry — part of your job is catching human mistakes, not laundering them into confident narrative.\n\n" +
     "Check the calendar around the forecast target: US holidays and holiday-adjacent days (July 4th week, Memorial Day, Labor Day, Thanksgiving, Christmas...) shift demand sharply — corporate delivery dies on office holidays while event/catering can spike. Adjust for them explicitly; a weekday-average baseline knows nothing about holidays.\n\n" +
@@ -204,9 +212,10 @@ async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = [
     `\n\nThe next operating day to forecast is ${targetDate ?? "(unknown)"}. ` +
     `A naive weekday-average baseline predicts net sales of ${baselineNextDay == null ? "n/a" : Math.round(baselineNextDay)} for that day.\n\n` +
     'Respond with ONLY a JSON object (no markdown fences) of shape:\n' +
-    '{ "headline": string (<=90 chars), "body": string (markdown, 3-5 short paragraphs or bullets), ' +
-    '"alerts": [{ "severity": "info"|"warn"|"alert", "title": string, "detail": string }], ' +
-    '"forecast": { "nextDayNetSales": number, "nextDayLaborPct": number (fraction, e.g. 0.30), "nextWeekNetSales": number, "rationale": string (<=200 chars) } }';
+    '{ "headline": string (<=60 chars, calm and factual, pattern "Tue $18.2k · labor 26% · <one short flag or steady>"), ' +
+    '"body": string (markdown, EXACTLY the five **Yesterday/Month so far/Labor/Cash/Watch today** lines from the system prompt, newline-separated), ' +
+    '"alerts": [{ "severity": "info"|"warn"|"alert", "title": string, "detail": string (plain text, no markdown) }] (max 2, only if action is needed today), ' +
+    '"forecast": { "nextDayNetSales": number, "nextDayLaborPct": number (fraction, e.g. 0.30), "nextWeekNetSales": number, "rationale": string (<=140 chars, plain text) } }';
 
   const { text, model } = await llmComplete({
     system,
@@ -343,7 +352,8 @@ export async function getInsight(d: Dashboard, opts: { force?: boolean } = {}): 
   const isLive = scopeISO != null && scopeISO === d.latestDate;
   const k = d.kpis;
   // Signature so the cache auto-invalidates when the day's numbers change.
-  const sig = `${scopeISO}|${Math.round(k.netSales ?? 0)}|${Math.round(k.laborCost ?? 0)}|${Math.round(k.cashPosition ?? 0)}`;
+  // The leading version tag busts the cache when the briefing format changes.
+  const sig = `v2|${scopeISO}|${Math.round(k.netSales ?? 0)}|${Math.round(k.laborCost ?? 0)}|${Math.round(k.cashPosition ?? 0)}`;
 
   const feedback = await loadForecastFeedback();
 
