@@ -17,7 +17,8 @@
     "seed": "tsx scripts/seed.ts",
     "ingest": "tsx scripts/ingest.ts",
     "validate:data": "tsx scripts/validate-data.ts",
-    "setup": "npm run db:start && npm run db:push && npm run extract && npm run seed"
+    "setup": "npm run db:start && npm run db:push && npm run extract && npm run seed",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
