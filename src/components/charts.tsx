@@ -300,3 +300,47 @@ export function CapacityChart({ data }: { data: { week: string; capacity: number
     </ResponsiveContainer>
   );
 }
+
+// --- Bookings: booked revenue per day (real forward orders) ------------------
+export function BookingsChart({
+  days,
+  window: win,
+}: {
+  days: { date: string; revenue: number; guests: number; count: number }[];
+  window: { from: string; to: string } | null;
+}) {
+  if (!win) return null;
+  // Fill the full window so no-booking days render as visible gaps.
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  const rows: { date: string; revenue: number; guests: number; count: number }[] = [];
+  for (let d = win.from; d <= win.to; ) {
+    rows.push(byDate.get(d) ?? { date: d, revenue: 0, guests: 0, count: 0 });
+    const nd = new Date(`${d}T00:00:00Z`);
+    nd.setUTCDate(nd.getUTCDate() + 1);
+    d = nd.toISOString().slice(0, 10);
+  }
+  const dayName = (d: string) =>
+    new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid stroke={GRID} vertical={false} />
+        <XAxis dataKey="date" tickFormatter={(d) => shortDate(d)} tick={AXIS} tickLine={false} axisLine={false} minTickGap={16} />
+        <YAxis tickFormatter={(v) => moneyCompact(v)} tick={AXIS} tickLine={false} axisLine={false} width={52} />
+        <Tooltip
+          cursor={{ fill: "rgba(255,56,92,0.06)" }}
+          content={({ active, payload, label }) =>
+            active && payload?.length ? (
+              <Box>
+                <div className="mb-1 font-semibold text-ink">{dayName(label as string)} {shortDate(label as string)}</div>
+                <div className="text-brand">Booked {money(payload[0]?.payload.revenue)}</div>
+                <div className="text-ink-2">{payload[0]?.payload.count} orders · {payload[0]?.payload.guests} guests</div>
+              </Box>
+            ) : null
+          }
+        />
+        <Bar dataKey="revenue" fill={TEAL} radius={[5, 5, 0, 0]} barSize={18} isAnimationActive={false} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}

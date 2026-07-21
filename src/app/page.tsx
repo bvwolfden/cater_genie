@@ -1,4 +1,5 @@
-import { getDashboard, getPulse, getStaffingOutlook } from "@/lib/dashboard";
+import Link from "next/link";
+import { getDashboard, getPulse, getStaffingOutlook, getBookingsOutlook } from "@/lib/dashboard";
 import { StaffingCallout } from "@/components/StaffingCallout";
 import { getInsight } from "@/lib/insights";
 import { getDataQuality } from "@/lib/quality";
@@ -31,11 +32,12 @@ export default async function Page({
   searchParams: Promise<{ date?: string; from?: string; to?: string; period?: string; qbo?: string }>;
 }) {
   const { date, from, to, period, qbo } = await searchParams;
-  const [data, pulse, quality, staffing] = await Promise.all([
+  const [data, pulse, quality, staffing, bookings] = await Promise.all([
     getDashboard({ date, from, to, period }),
     getPulse(),
     getDataQuality(),
     getStaffingOutlook(),
+    getBookingsOutlook(),
   ]);
   const insight = await getInsight(data);
 
@@ -134,6 +136,40 @@ export default async function Page({
             />
             <WeeklyCompChart data={data.weekly} />
           </Card>
+
+          {bookings.totals.bookings > 0 && (
+            <Card className="card-pad">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-ink">Booked Ahead</div>
+                  <div className="text-[11px] text-ink-3">
+                    Real orders on the books
+                    {bookings.window ? ` · ${shortDate(bookings.window.from)} – ${shortDate(bookings.window.to)}` : ""}
+                  </div>
+                </div>
+                <div className="flex items-center gap-5">
+                  <div className="text-right">
+                    <div className="stat-label">Revenue</div>
+                    <div className="text-lg font-semibold tabular-nums text-ink">{money(bookings.totals.revenue)}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="stat-label">Orders</div>
+                    <div className="text-lg font-semibold tabular-nums text-ink">{bookings.totals.bookings}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="stat-label">Next 7 days</div>
+                    <div className="text-lg font-semibold tabular-nums text-ink">{money(bookings.next7.revenue)}</div>
+                  </div>
+                  <Link
+                    href="/bookings"
+                    className="rounded-lg bg-brand px-3.5 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90"
+                  >
+                    View bookings →
+                  </Link>
+                </div>
+              </div>
+            </Card>
+          )}
 
           <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
             <Card className="card-pad">
