@@ -375,29 +375,44 @@ interface TableCounts {
   eventBookings: number;
 }
 
-/** Rule 10 — committed imports must still be in the DB: each COMMITTED
- * ImportBatch and each MANUAL SUCCESS SyncRun claims rowsWritten; the target
- * table must still hold at least that many rows. */
+/** Rule 10 — committed imports must still be in the DB. `rowsWritten` counts
+ * rows across EVERY table an import touches (a daily_metrics batch writes
+ * DailyMetric + DailySales + AccountBalance rows), so comparing it against
+ * one table false-alarms. Expected counts come from the batch's stored
+ * parsed payload (days/labor/bookings array lengths) when available. */
 function checkImportIntegrity(
-  batches: { id: number; kind: string | null; filename: string; rowsWritten: number; committedAt: Date | null; createdAt: Date }[],
+  batches: { id: number; kind: string | null; filename: string; rowsWritten: number; committedAt: Date | null; createdAt: Date; parsed: unknown }[],
   syncRuns: { id: number; rowsWritten: number; startedAt: Date; message: string | null }[],
   counts: TableCounts
 ): QualityFlag[] {
   const flags: QualityFlag[] = [];
+  const expectedOf = (kind: string, parsed: unknown, fallback: number): number => {
+    const p = parsed as { days?: unknown[]; labor?: unknown[]; bookings?: unknown[] } | null;
+    if (!p || typeof p !== "object") return fallback;
+    if (kind === "daily_metrics" || kind === "catertrax_sales") return p.days?.length ?? fallback;
+    if (kind === "timesheet") return p.labor?.length ?? fallback;
+    if (kind === "caterease_bookings") return p.bookings?.length ?? fallback;
+    return fallback;
+  };
   for (const b of batches) {
     const target = b.kind ? IMPORT_TARGETS[b.kind] : undefined;
     if (!target || b.rowsWritten <= 0) continue; // unknown kind — not checkable
+    const expected = expectedOf(b.kind!, b.parsed, b.rowsWritten);
+    if (expected <= 0) continue;
     const have = target.count(counts);
-    if (have >= b.rowsWritten) continue;
+    if (have >= expected) continue;
     flags.push({
       date: iso(b.committedAt ?? b.createdAt), severity: "critical", category: "reconciliation", kind: "import_integrity",
       title: "Committed import rows missing from DB",
-      detail: `Import #${b.id} (${b.filename}) committed ${b.rowsWritten} ${b.kind} rows, but ${target.table} now holds only ${have}.`,
+      detail: `Import #${b.id} (${b.filename}) committed ${expected} ${b.kind} rows, but ${target.table} now holds only ${have}.`,
     });
   }
   for (const s of syncRuns) {
     const kind = s.message?.match(/\((daily_metrics|timesheet|catertrax_sales|caterease_bookings)\)/)?.[1];
-    const target = kind ? IMPORT_TARGETS[kind] : undefined;
+    // daily_metrics SyncRuns carry the multi-table total (no payload to
+    // decompose) — the batch check above covers those accurately.
+    if (!kind || kind === "daily_metrics") continue;
+    const target = IMPORT_TARGETS[kind];
     if (!target) continue;
     const have = target.count(counts);
     if (have >= s.rowsWritten) continue;
