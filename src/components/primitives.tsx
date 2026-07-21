@@ -1,8 +1,8 @@
 import { cn } from "@/lib/cn";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 
-export function Card({ className, children }: { className?: string; children: React.ReactNode }) {
-  return <div className={cn("card", className)}>{children}</div>;
+export function Card({ className, children, id }: { className?: string; children: React.ReactNode; id?: string }) {
+  return <div id={id} className={cn("card", className)}>{children}</div>;
 }
 
 export function SectionHeader({
