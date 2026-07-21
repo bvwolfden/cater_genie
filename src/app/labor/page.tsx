@@ -102,7 +102,7 @@ export default async function LaborPage({
           label="Projected Payroll · Year-end"
           value={money(a.projectedYearEndLabor)}
           accent="text-ink-2"
-          sub={`modeled · from ${money(a.ytdLabor)} YTD`}
+          sub={`seasonal model · from ${money(a.ytdLabor)} YTD`}
           badge={<ProjBadge />}
         />
       </div>
@@ -121,7 +121,7 @@ export default async function LaborPage({
           <Card className="card-pad">
             <SectionHeader
               title="Labor Cost Trend & Projection"
-              subtitle="Weekly labor — actual to date, projected to year-end"
+              subtitle="Weekly labor — actual to date; projection = prior-year seasonality × 2026 pace"
               right={<ChartLegend items={[{ color: "#FFB400", label: "Labor" }]} note="solid = actual, dotted = projected" />}
             />
             <LaborTrendChart weekly={a.weekly} boundary={boundary} />
