@@ -16,6 +16,7 @@
     "extract": "python3 scripts/extract_spreadsheets.py",
     "seed": "tsx scripts/seed.ts",
     "ingest": "tsx scripts/ingest.ts",
+    "validate:data": "tsx scripts/validate-data.ts",
     "setup": "npm run db:start && npm run db:push && npm run extract && npm run seed"
   },
   "dependencies": {
