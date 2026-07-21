@@ -105,6 +105,145 @@ async function reportDay(cookie: string, mdY: string): Promise<{ orderCount: num
   return { orderCount: isNaN(count) ? null : count, total, ok: true };
 }
 
+// --- Forward bookings (future orders) ---------------------------------------
+// The same shopa_multireport.asp endpoint happily reports on future
+// opromisedshipdate ranges (year picker runs through 2030). Adding the
+// `detail` flag returns one row per order: Order ID | Event Date | Department
+// | First Name | Last Name | Status | Guest Count | Total. Verified live
+// July 2026 (76 orders over the next 14 days).
+
+export interface CaterTraxOrder {
+  orderId: string;
+  dateISO: string;
+  name: string; // "<Department or First Last> (#<orderId>)" — stable upsert key
+  status: string | null;
+  guests: number | null;
+  revenue: number | null;
+}
+
+const mdyToISO = (s: string): string | null => {
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+};
+
+/** Row-level orders report over a date range (one POST, detail rows). */
+async function reportOrders(cookie: string, fromMdY: string, toMdY: string): Promise<{ orders: CaterTraxOrder[]; ok: boolean }> {
+  const body = new URLSearchParams();
+  body.set("datefield", "opromisedshipdate"); // delivery/event date
+  body.set("fromdate", fromMdY);
+  body.set("todate", toMdY);
+  body.append("displayfields", "orderid|Order ID|count");
+  body.append("displayfields", "opromisedshipdate|Event Date|hide");
+  body.append("displayfields", "ocompany|Department|hide");
+  body.append("displayfields", "ofirstname|First Name|hide");
+  body.append("displayfields", "olastname|Last Name|hide");
+  body.append("displayfields", "ostatus|Status|hide");
+  body.append("displayfields", "oguestcount|Guest Count|sum");
+  body.append("displayfields", "orderamount|Total|SumCurrency");
+  body.set("nocancelled", "Cancel"); // exclude cancelled orders
+  body.set("detail", "detail"); // one row per order instead of totals only
+  body.set("Details", "Build");
+
+  const r = await fetch(`${host()}/shopa_multireport.asp?${REPORT_QS}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: cookie },
+    body,
+  });
+  const html = await r.text();
+  if (!/Grand Totals/i.test(html)) return { orders: [], ok: false }; // session likely expired
+
+  const orders: CaterTraxOrder[] = [];
+  for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((c) =>
+      c[1].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim()
+    );
+    if (cells.length < 8 || !/^\d+$/.test(cells[0])) continue; // header/subtotal/grand-total rows
+    const dateISO = mdyToISO(cells[1]);
+    if (!dateISO) continue;
+    const [orderId, , company, first, last, status, guestsRaw, totalRaw] = cells;
+    const junk = (s: string) => !s || s === "-" || s === "0";
+    const person = [first, last].filter((s) => !junk(s)).join(" ");
+    const customer = (!junk(company) ? company : person) || "CaterTrax order";
+    const guests = parseInt(guestsRaw.replace(/[^0-9]/g, ""), 10);
+    orders.push({
+      orderId,
+      dateISO,
+      name: `${customer} (#${orderId})`,
+      status: status ? status.toLowerCase() : null,
+      guests: isNaN(guests) ? null : guests,
+      revenue: money(totalRaw),
+    });
+  }
+  return { orders, ok: true };
+}
+
+/**
+ * Pull forward bookings (future orders) for [tomorrow, tomorrow+daysAhead] and
+ * upsert them into EventBooking (source CATERTRAX) so the staffing outlook
+ * sees committed catering demand. Never deletes rows — Caterease bookings
+ * share the table, and stale CaterTrax rows are simply re-upserted next run.
+ */
+export async function syncCaterTraxBookings(
+  daysAhead = 14
+): Promise<{ orders: number; written: number; fromISO: string; toISO: string; totalRevenue: number }> {
+  const { prisma } = await import("../db");
+  const from = new Date(Date.now() + 86_400_000); // tomorrow
+  const to = new Date(from.getTime() + daysAhead * 86_400_000);
+  const fromISO = isoDate(from);
+  const toISO = isoDate(to);
+
+  let cookie = await ensureSession();
+  let res = await reportOrders(cookie, mmddyyyy(from), mmddyyyy(to));
+  if (!res.ok) {
+    cookie = await ensureSession(true); // re-login once and retry
+    res = await reportOrders(cookie, mmddyyyy(from), mmddyyyy(to));
+  }
+  if (!res.ok) {
+    await prisma.syncRun.create({
+      data: { source: "CATERTRAX", status: "FAILED", rowsWritten: 0, finishedAt: new Date(), message: "CaterTrax bookings: report did not return data (session/report error)." },
+    });
+    throw new ConnectorUnavailableError("CATERTRAX", "Bookings report did not return data (session/report error).");
+  }
+
+  let written = 0;
+  let totalRevenue = 0;
+  for (const o of res.orders) {
+    const eventDate = new Date(`${o.dateISO}T00:00:00Z`);
+    await prisma.eventBooking.upsert({
+      where: { eventDate_name: { eventDate, name: o.name } },
+      create: { eventDate, name: o.name, status: o.status, guests: o.guests, revenue: o.revenue, source: "CATERTRAX" },
+      update: { status: o.status, guests: o.guests, revenue: o.revenue, source: "CATERTRAX" },
+    });
+    written++;
+    totalRevenue += o.revenue ?? 0;
+  }
+
+  // Post-commit invariant: a committed import vanished from this DB once, so
+  // re-count what we just wrote and refuse to report success if rows are gone.
+  const persisted = await prisma.eventBooking.count({
+    where: {
+      source: "CATERTRAX",
+      eventDate: { gte: new Date(`${fromISO}T00:00:00Z`), lte: new Date(`${toISO}T00:00:00Z`) },
+    },
+  });
+  const ok = persisted >= written;
+  const summary = `CaterTrax bookings: ${res.orders.length} orders over next ${daysAhead} days (${fromISO} → ${toISO}, $${Math.round(totalRevenue).toLocaleString()})`;
+  await prisma.syncRun.create({
+    data: {
+      source: "CATERTRAX",
+      status: ok ? "SUCCESS" : "FAILED",
+      rowsWritten: written,
+      finishedAt: new Date(),
+      message: ok ? summary : `${summary} — INVARIANT FAILED: only ${persisted} of ${written} upserted rows found after commit.`,
+    },
+  });
+  if (!ok) {
+    throw new Error(`CaterTrax bookings post-commit check failed: wrote ${written} rows but only ${persisted} persisted.`);
+  }
+  return { orders: res.orders.length, written, fromISO, toISO, totalRevenue };
+}
+
 export const caterTraxConnector: Connector = {
   status(): ConnectorStatus {
     const { user, pass } = CREDS();
