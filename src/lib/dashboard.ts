@@ -79,6 +79,8 @@ export interface Dashboard {
     laborHours: number | null;
     foodPurchases: number | null;
     mtdNetSales: number | null;
+    mtdNetSalesPrevSpan: number | null;
+    mtdPriorLabel: string | null;
     mtdLaborCost: number | null;
     mtdLaborPct: number | null;
     mtdAvgDailySales: number | null;
@@ -545,6 +547,16 @@ export async function getDashboard(opts?: {
     periodKpis = { period: periodKey, label: "", priorLabel: "", sparkUnit: "week", from: null, to: null, netSales: 0, netSalesPrev: 0, laborCost: 0, laborPct: null, laborPctPrev: null, hours: 0, hoursPrev: 0, food: 0, foodPrev: 0, cash: null, cashPrev: null, spark: { net: [], laborPct: [], hours: [], food: [], cash: [] } };
   }
 
+  // MTD card comparison: same day-span of the prior month (not last month's
+  // full total vs a partial current month).
+  let mtdNetSalesPrevSpan: number | null = null;
+  let mtdPriorLabel: string | null = null;
+  if (selectedDate) {
+    const mp = resolvePeriod("month", selectedDate);
+    mtdNetSalesPrevSpan = sumRange(mp.priorFrom, mp.priorTo, (d) => d.netSales);
+    mtdPriorLabel = `${mp.priorLabel} (same days)`;
+  }
+
   // --- Forward Daily Ledger: project next 10 days from weekday seasonality --
   const forwardDays: DayPoint[] = [];
   if (latestDate) {
@@ -638,6 +650,8 @@ export async function getDashboard(opts?: {
       laborHours: latest?.laborHours ?? null,
       foodPurchases: latest?.foodPurchases ?? null,
       mtdNetSales: mtd.count ? mtd.net : null,
+      mtdNetSalesPrevSpan,
+      mtdPriorLabel,
       mtdLaborCost: mtd.count ? mtd.labor : null,
       mtdLaborPct: mtd.net ? mtd.labor / mtd.net : null,
       mtdAvgDailySales: mtd.count ? mtd.net / mtd.count : null,

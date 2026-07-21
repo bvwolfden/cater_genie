@@ -1,5 +1,5 @@
 import type { Dashboard } from "@/lib/dashboard";
-import { money, percent, hours, laborHealth, deltaPct, shortDate } from "@/lib/format";
+import { money, percent, hours, laborHealth, deltaPct } from "@/lib/format";
 import { Card, Delta, Sparkline } from "./primitives";
 import { cn } from "@/lib/cn";
 import { DollarSign, Users, Banknote, CalendarRange, Utensils, Clock } from "lucide-react";
@@ -53,7 +53,6 @@ export function Kpis({ data }: { data: Dashboard }) {
   const sparkCaption = `by ${w.sparkUnit} · last 8`;
   const tone = laborHealth(w.laborPct);
   const laborAccent = tone === "alert" ? "text-rose" : tone === "warn" ? "text-amber" : "text-mint";
-  const mom = data.comparisons.mom;
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -94,11 +93,11 @@ export function Kpis({ data }: { data: Dashboard }) {
       />
 
       <StatCard
-        label={`Net Sales · ${k.monthLabel ?? "MTD"}`}
+        label={`Net Sales · ${k.monthLabel ?? "MTD"} MTD`}
         value={money(k.mtdNetSales)}
         icon={<CalendarRange className="h-4 w-4" />}
-        deltaValue={mom.sales.deltaPct}
-        deltaLabel={`vs ${mom.priorLabel}`}
+        deltaValue={deltaPct(k.mtdNetSales, k.mtdNetSalesPrevSpan)}
+        deltaLabel={`vs ${k.mtdPriorLabel ?? "prior month"}`}
         spark={w.spark.net}
         sparkColor="#FF385C"
         sparkCaption={sparkCaption}
