@@ -73,6 +73,9 @@ const label = (s: RouteStop): string => s.company ?? s.building ?? `#${s.orderId
  */
 export function computeConflicts(lanes: DriverLaneModel[], unassigned: RouteStop[]): Conflict[] {
   const out: Conflict[] = [];
+  // No driver schedule imported for this day yet → nothing meaningful to flag;
+  // the board's empty state already says "import the week's schedule".
+  if (!lanes.length) return out;
 
   // Tight runs within an assigned lane: consecutive stops the driver can't make.
   for (const lane of lanes) {

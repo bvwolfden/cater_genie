@@ -371,11 +371,12 @@ export async function syncDeliveryStops(
     const dISO = dateByOrder.get(orderId);
     if (!dISO) continue; // cancelled or outside the window
     const date = new Date(`${dISO}T00:00:00Z`);
-    const addressKey = cs.address ? normalizeAddressKey(`${cs.address}, ${cs.city ?? "Pittsburgh"} ${cs.zip ?? ""}`) : null;
+    // IMPORTANT: the stop's addressKey must be derived from the SAME string
+    // the geocoder caches under, or GeoPoint lookups miss.
+    const rawAddress = cs.address ? `${cs.address}, ${cs.city ?? "Pittsburgh"}, PA ${cs.zip ?? ""}`.trim() : null;
+    const addressKey = rawAddress ? normalizeAddressKey(rawAddress) : null;
     if (!cs.address) missingAddress++;
-    if (addressKey && !rawByKey.has(addressKey)) {
-      rawByKey.set(addressKey, `${cs.address}, ${cs.city ?? "Pittsburgh"}, PA ${cs.zip ?? ""}`.trim());
-    }
+    if (addressKey && rawAddress && !rawByKey.has(addressKey)) rawByKey.set(addressKey, rawAddress);
     const existing = await prisma.deliveryStop.findUnique({ where: { orderId } });
     const moved = existing && isoDate(existing.date) !== dISO;
     await prisma.deliveryStop.upsert({
@@ -398,7 +399,7 @@ export async function syncDeliveryStops(
   // Geocode a bounded batch of new addresses (Nominatim policy: sequential,
   // throttled, cached). The rest are picked up on subsequent runs.
   let geocoded = 0;
-  for (const raw of [...rawByKey.values()].slice(0, 10)) {
+  for (const raw of [...rawByKey.values()].slice(0, 25)) {
     if (await geocodeCached(raw)) geocoded++;
   }
 
