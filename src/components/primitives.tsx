@@ -109,6 +109,67 @@ export function ChartLegend({
   );
 }
 
+/** Amber "PROJECTED" marker — fitted/blended/forecast numbers, not actuals. */
+export function ProjBadge({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full bg-amber/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-amber",
+        className
+      )}
+      title="Projected — modeled from historical patterns, not an actual"
+    >
+      Projected
+    </span>
+  );
+}
+
+/** Rose-outline "ESTIMATE" marker; `note` names the underlying assumption. */
+export function EstBadge({ note, className }: { note: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full border border-rose/30 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-rose",
+        className
+      )}
+      title={note}
+    >
+      Estimate
+    </span>
+  );
+}
+
+/** Tiny "n/m days" data-coverage marker — amber when the window has gaps. */
+export function CoverageDot({
+  daysWithData,
+  daysExpected,
+  className,
+}: {
+  daysWithData: number;
+  daysExpected: number;
+  className?: string;
+}) {
+  if (!daysExpected) return null;
+  const complete = daysWithData >= daysExpected;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 text-[10px] font-medium tabular-nums",
+        complete ? "text-ink-3" : "text-amber",
+        className
+      )}
+      title={
+        complete
+          ? "Every day in this window has data"
+          : `Data for ${daysWithData} of ${daysExpected} days — totals are partial`
+      }
+    >
+      <span className={cn("h-1 w-1 rounded-full", complete ? "bg-ink-3" : "bg-amber")} />
+      {daysWithData}/{daysExpected} days
+    </span>
+  );
+}
+
 export function StatusDot({ tone }: { tone: "good" | "warn" | "alert" | "idle" }) {
   const color = {
     good: "bg-mint",

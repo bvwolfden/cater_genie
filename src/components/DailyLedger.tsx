@@ -1,6 +1,6 @@
 import type { Dashboard } from "@/lib/dashboard";
 import { money, percent, weekdayDate, laborHealth } from "@/lib/format";
-import { Card, SectionHeader } from "./primitives";
+import { Card, SectionHeader, ProjBadge } from "./primitives";
 import { cn } from "@/lib/cn";
 
 export function DailyLedger({ data }: { data: Dashboard }) {
@@ -18,7 +18,12 @@ export function DailyLedger({ data }: { data: Dashboard }) {
   return (
     <Card className="card-pad">
       <SectionHeader
-        title="Daily Ledger"
+        title={
+          <span className="flex items-center gap-2">
+            Daily Ledger
+            <ProjBadge />
+          </span>
+        }
         subtitle="Next 10 days projected (italic) · then recent actuals"
       />
       {/* Desktop: table */}

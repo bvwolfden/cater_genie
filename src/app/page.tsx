@@ -14,7 +14,7 @@ import { DailyLedger } from "@/components/DailyLedger";
 import { Comparisons } from "@/components/Comparisons";
 import { Pulse } from "@/components/Pulse";
 import { InsightsPanel } from "@/components/InsightsPanel";
-import { Card, SectionHeader, ChartLegend } from "@/components/primitives";
+import { Card, SectionHeader, ChartLegend, ProjBadge } from "@/components/primitives";
 import { money, percent, shortDate } from "@/lib/format";
 import {
   SalesTrendChart,
@@ -120,13 +120,16 @@ export default async function Page({
               title="Weekly Revenue vs Prior Year & Projection"
               subtitle="Weekly revenue · last 16 weeks · dashed = projected ahead"
               right={
-                <ChartLegend
-                  items={[
-                    { color: "#FF385C", label: "2026 revenue" },
-                    { color: "#A6A6A6", label: "Prior year" },
-                    { color: "#FFB400", label: "Actual → projected" },
-                  ]}
-                />
+                <div className="flex items-center gap-2">
+                  <ChartLegend
+                    items={[
+                      { color: "#FF385C", label: "2026 revenue" },
+                      { color: "#A6A6A6", label: "Prior year" },
+                      { color: "#FFB400", label: "Actual → projected" },
+                    ]}
+                  />
+                  <ProjBadge />
+                </div>
               }
             />
             <WeeklyCompChart data={data.weekly} />
