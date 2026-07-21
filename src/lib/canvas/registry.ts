@@ -58,7 +58,12 @@ export const BOOKINGS_CARDS: CardMeta[] = [
   { id: "upcoming-bookings", title: "Upcoming Bookings", description: "Every booked day with its orders, statuses, and revenue", defaultSpan: 2 },
   { id: "by-source", title: "By Source", description: "Where these bookings come from, with last-sync status", defaultSpan: 1 },
 ];
-export const DELIVERY_CARDS: CardMeta[] = [];
+export const DELIVERY_CARDS: CardMeta[] = [
+  { id: "slot-finder", title: "Slot Finder", description: "Answer the booking call: what windows can we offer, and pencil one in", defaultSpan: 3 },
+  { id: "needs-attention", title: "Needs Attention", description: "Conflict flags for the day — tight runs, no-driver windows", defaultSpan: 3 },
+  { id: "delivery-board", title: "Delivery Board", description: "Driver lanes and unassigned drops with assignment pickers", defaultSpan: 2 },
+  { id: "delivery-map", title: "Map", description: "Pins by driver with run order from the depot", defaultSpan: 1 },
+];
 
 export const TAB_CARDS: Record<TabId, CardMeta[]> = {
   overview: OVERVIEW_CARDS,
