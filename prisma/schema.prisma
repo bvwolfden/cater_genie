@@ -226,6 +226,31 @@ model ImportBatch {
   committedAt DateTime?
 }
 
+/// A future scheduled shift (When I Work schedule export today; WIW API once
+/// creds land). Powers the staffing outlook: scheduled labor vs projected
+/// demand, so over/under-staffing is flagged while there's still time to act.
+model ScheduledShift {
+  id          Int          @id @default(autoincrement())
+  date        DateTime     @db.Date
+  department  String? // WIW "Schedule": Cater Hot, Cafe, Delivery, SALES...
+  position    String?
+  employeeId  String?
+  firstName   String?
+  lastName    String?
+  startTime   String? // "5:00 am" — display only
+  endTime     String?
+  unpaidBreak Decimal?     @db.Decimal(6, 2)
+  hours       Decimal?     @db.Decimal(10, 2) // scheduled (paid) hours
+  hourlyRate  Decimal?     @db.Decimal(10, 2)
+  laborCost   Decimal?     @db.Decimal(14, 2) // hours × rate when not in the export
+  status      String? // Published | Open | ...
+  source      SourceSystem @default(WHENIWORK)
+  createdAt   DateTime     @default(now())
+
+  @@index([date])
+  @@index([department])
+}
+
 /// Forward event bookings (Caterease exports / manual). The missing input the
 /// June forecast backtest identified: event days run ~7x a normal day.
 model EventBooking {

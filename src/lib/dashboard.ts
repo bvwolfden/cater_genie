@@ -1155,3 +1155,254 @@ export async function getForwardPlanning(): Promise<ForwardPlanning> {
 
   return { today, demandFactor, coverage, events, capacityWeeks, pto, anomalies: anomalies.slice(0, 8) };
 }
+
+// ---------------------------------------------------------------------------
+// Staffing outlook — REAL scheduled shifts (When I Work schedule import) vs
+// projected demand. Demand per day = per-weekday norms from the last 4 weeks
+// of actuals, scaled up when bookings land on the day. This is the "are we
+// over/under-staffed next week?" signal Kevin currently eyeballs by hand.
+// ---------------------------------------------------------------------------
+export interface StaffingDay {
+  date: string;
+  scheduledHours: number;
+  scheduledCost: number;
+  headcount: number;
+  projectedSales: number | null;
+  expectedHours: number | null; // weekday-typical hours × demand ratio
+  gapHours: number | null; // scheduled − expected
+  scheduledLaborPct: number | null; // scheduled cost ÷ projected sales
+  status: "short" | "ok" | "over" | "unknown";
+  events: { name: string; revenue: number | null; guests: number | null }[];
+}
+
+export interface StaffingDept {
+  department: string;
+  scheduledHours: number;
+  scheduledCost: number;
+  headcount: number;
+  typicalHours: number | null; // avg weekly hours, recent timesheet weeks
+  gapHours: number | null;
+  status: "short" | "ok" | "over" | "unknown";
+}
+
+export interface StaffingOutlook {
+  window: { from: string; to: string };
+  totals: {
+    scheduledHours: number;
+    scheduledCost: number;
+    headcount: number;
+    projectedSales: number | null;
+    scheduledLaborPct: number | null;
+    benchmarkLaborPct: number | null; // recent actual daily labor %
+  };
+  days: StaffingDay[];
+  byDepartment: StaffingDept[];
+  callouts: { severity: "alert" | "warn" | "ok"; text: string }[];
+}
+
+const HOUR_TOLERANCE = 0.15; // ±15% of expected hours reads as "ok"
+
+export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
+  const [shifts, metrics, laborEntries, bookings] = await Promise.all([
+    prisma.scheduledShift.findMany({ orderBy: { date: "asc" } }),
+    prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
+    prisma.laborEntry.findMany({}),
+    prisma.eventBooking.findMany({}),
+  ]);
+  if (!shifts.length) return null;
+
+  // Data edge: the last day with real sales. Shifts beyond it are "upcoming".
+  const actualDays = metrics.filter((m) => n(m.netSales) != null);
+  const latestDate = actualDays.length ? iso(actualDays[actualDays.length - 1].date) : null;
+  const upcoming = shifts.filter((s) => !latestDate || iso(s.date) > latestDate);
+  if (!upcoming.length) return null;
+
+  // Per-weekday norms from the last 4 weeks of actuals (mirrors the forward
+  // ledger: labor is scheduled per weekday, not a % of a slow Monday's sales).
+  const lookback = latestDate ? addDays(latestDate, -27) : null;
+  const recent = actualDays.filter((m) => !lookback || (iso(m.date) > lookback && iso(m.date) <= latestDate!));
+  const salesByDow = new Map<number, number[]>();
+  const hoursByDow = new Map<number, number[]>();
+  const push = (m: Map<number, number[]>, k: number, v: number) => {
+    const arr = m.get(k);
+    if (arr) arr.push(v);
+    else m.set(k, [v]);
+  };
+  let recLabor = 0, recSales = 0;
+  for (const m of recent) {
+    const dow = m.date.getUTCDay();
+    push(salesByDow, dow, n(m.netSales)!);
+    const lh = n(m.laborHours);
+    if (lh != null) push(hoursByDow, dow, lh);
+    const lc = n(m.laborCost);
+    if (lc != null && n(m.netSales)) { recLabor += lc; recSales += n(m.netSales)!; }
+  }
+  const avgOf = (m: Map<number, number[]>, k: number): number | null => {
+    const arr = m.get(k);
+    return arr?.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  };
+  const benchmarkLaborPct = recSales ? recLabor / recSales : null;
+
+  // Booked events by date (real bookings only — no stubs here).
+  const eventsByDate = new Map<string, { name: string; revenue: number | null; guests: number | null }[]>();
+  for (const b of bookings) {
+    const d = iso(b.eventDate);
+    const arr = eventsByDate.get(d) ?? [];
+    arr.push({ name: b.name ?? "(unnamed event)", revenue: n(b.revenue), guests: b.guests ?? null });
+    eventsByDate.set(d, arr);
+  }
+
+  // Group upcoming shifts per day.
+  const byDay = new Map<string, { hours: number; cost: number; emps: Set<string> }>();
+  const byDept = new Map<string, { hours: number; cost: number; emps: Set<string> }>();
+  for (const s of upcoming) {
+    const d = iso(s.date);
+    const hrs = n(s.hours) ?? 0;
+    const cost = n(s.laborCost) ?? (n(s.hours) != null && n(s.hourlyRate) != null ? n(s.hours)! * n(s.hourlyRate)! : 0);
+    const key = s.employeeId || [s.firstName, s.lastName].join(" ");
+    const dd = byDay.get(d) ?? { hours: 0, cost: 0, emps: new Set<string>() };
+    dd.hours += hrs; dd.cost += cost; dd.emps.add(key);
+    byDay.set(d, dd);
+    const dept = s.department ?? "—";
+    const dp = byDept.get(dept) ?? { hours: 0, cost: 0, emps: new Set<string>() };
+    dp.hours += hrs; dp.cost += cost; dp.emps.add(key);
+    byDept.set(dept, dp);
+  }
+
+  const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+  const shiftDates = [...byDay.keys()].sort();
+  const from = shiftDates[0], to = shiftDates[shiftDates.length - 1];
+  // Walk every day in the window — a zero-shift day with typical demand is
+  // the worst staffing miss, and it wouldn't appear in the shift grouping.
+  const dayDates: string[] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) dayDates.push(d);
+
+  const days: StaffingDay[] = dayDates.map((d) => {
+    const v = byDay.get(d) ?? { hours: 0, cost: 0, emps: new Set<string>() };
+    const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
+    const baseSales = avgOf(salesByDow, dow);
+    const dayEvents = eventsByDate.get(d) ?? [];
+    const eventRev = dayEvents.reduce((s, e) => s + (e.revenue ?? 0), 0);
+    const projectedSales = baseSales != null ? Math.round(baseSales + eventRev) : eventRev || null;
+    // Demand ratio scales weekday-typical hours when bookings add volume.
+    const ratio = baseSales ? clamp((baseSales + eventRev) / baseSales, 1, 2) : 1;
+    const typicalHours = avgOf(hoursByDow, dow);
+    const expectedHours = typicalHours != null ? typicalHours * ratio : null;
+    const gapHours = expectedHours != null ? v.hours - expectedHours : null;
+    const status: StaffingDay["status"] =
+      expectedHours == null || expectedHours === 0
+        ? "unknown"
+        : v.hours < expectedHours * (1 - HOUR_TOLERANCE)
+          ? "short"
+          : v.hours > expectedHours * (1 + HOUR_TOLERANCE)
+            ? "over"
+            : "ok";
+    return {
+      date: d,
+      scheduledHours: Math.round(v.hours * 10) / 10,
+      scheduledCost: Math.round(v.cost),
+      headcount: v.emps.size,
+      projectedSales,
+      expectedHours: expectedHours != null ? Math.round(expectedHours * 10) / 10 : null,
+      gapHours: gapHours != null ? Math.round(gapHours * 10) / 10 : null,
+      scheduledLaborPct: projectedSales ? v.cost / projectedSales : null,
+      status,
+      events: dayEvents,
+    };
+  });
+
+  // Department view: scheduled week vs avg weekly dept hours from recent
+  // timesheet weeks (LaborEntry history).
+  const deptWeekly = new Map<string, Map<string, number>>(); // dept -> week -> hours
+  for (const r of laborEntries) {
+    const dept = r.department ?? "—";
+    const d = iso(r.date);
+    const dowN = new Date(`${d}T00:00:00Z`).getUTCDay();
+    const weekStart = addDays(d, -((dowN + 6) % 7)); // Monday
+    const wk = deptWeekly.get(dept) ?? new Map<string, number>();
+    wk.set(weekStart, (wk.get(weekStart) ?? 0) + (n(r.regularHours) ?? 0) + (n(r.otHours) ?? 0));
+    deptWeekly.set(dept, wk);
+  }
+  const typicalDeptHours = (dept: string): number | null => {
+    const wk = deptWeekly.get(dept);
+    if (!wk?.size) return null;
+    const weeks = [...wk.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).slice(-4);
+    return weeks.reduce((s, [, h]) => s + h, 0) / weeks.length;
+  };
+
+  const byDepartment: StaffingDept[] = [...byDept.entries()]
+    .map(([department, v]) => {
+      const typical = typicalDeptHours(department);
+      const gap = typical != null ? v.hours - typical : null;
+      const status: StaffingDept["status"] =
+        typical == null
+          ? "unknown"
+          : v.hours < typical * (1 - HOUR_TOLERANCE) - 2
+            ? "short"
+            : v.hours > typical * (1 + HOUR_TOLERANCE) + 2
+              ? "over"
+              : "ok";
+      return {
+        department,
+        scheduledHours: Math.round(v.hours * 10) / 10,
+        scheduledCost: Math.round(v.cost),
+        headcount: v.emps.size,
+        typicalHours: typical != null ? Math.round(typical * 10) / 10 : null,
+        gapHours: gap != null ? Math.round(gap * 10) / 10 : null,
+        status,
+      };
+    })
+    .sort((a, b) => (a.gapHours ?? 0) - (b.gapHours ?? 0));
+
+  const totalsHours = days.reduce((s, d) => s + d.scheduledHours, 0);
+  const totalsCost = days.reduce((s, d) => s + d.scheduledCost, 0);
+  const projTotal = days.every((d) => d.projectedSales == null) ? null : days.reduce((s, d) => s + (d.projectedSales ?? 0), 0);
+  const headcount = new Set(upcoming.map((s) => s.employeeId || [s.firstName, s.lastName].join(" "))).size;
+
+  // Callouts — the 1–3 things worth saying out loud on the main dashboard.
+  const callouts: StaffingOutlook["callouts"] = [];
+  const fmtDay = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+  const shortDays = days.filter((d) => d.status === "short").sort((a, b) => (a.gapHours ?? 0) - (b.gapHours ?? 0));
+  const overDays = days.filter((d) => d.status === "over").sort((a, b) => (b.gapHours ?? 0) - (a.gapHours ?? 0));
+  if (shortDays.length) {
+    const w = shortDays[0];
+    callouts.push({
+      severity: "alert",
+      text: `${fmtDay(w.date)} looks understaffed: ${w.scheduledHours}h scheduled vs ~${w.expectedHours}h typical${w.events.length ? ` with ${w.events.length} booked event${w.events.length > 1 ? "s" : ""}` : ""} — add ~${Math.ceil(Math.abs(w.gapHours ?? 0) / 8)} shift${Math.abs(w.gapHours ?? 0) > 8 ? "s" : ""}.`,
+    });
+  }
+  if (overDays.length) {
+    const w = overDays[0];
+    callouts.push({
+      severity: "warn",
+      text: `${fmtDay(w.date)} looks overstaffed: ${w.scheduledHours}h vs ~${w.expectedHours}h typical (+${w.gapHours}h) — ~${money0(w.scheduledCost - Math.round((w.expectedHours ?? 0) * (w.scheduledHours ? w.scheduledCost / w.scheduledHours : 0)))} of trimmable labor.`,
+    });
+  }
+  const worstDept = byDepartment.find((d) => d.status === "short");
+  if (worstDept) {
+    callouts.push({
+      severity: "warn",
+      text: `${worstDept.department} is scheduled ${Math.abs(worstDept.gapHours ?? 0)}h under its recent weekly average (${worstDept.scheduledHours}h vs ~${worstDept.typicalHours}h).`,
+    });
+  }
+  if (!callouts.length) {
+    callouts.push({ severity: "ok", text: `Schedule tracks recent staffing levels — ${Math.round(totalsHours)}h across ${headcount} people.` });
+  }
+
+  return {
+    window: { from, to },
+    totals: {
+      scheduledHours: Math.round(totalsHours * 10) / 10,
+      scheduledCost: Math.round(totalsCost),
+      headcount,
+      projectedSales: projTotal,
+      scheduledLaborPct: projTotal ? totalsCost / projTotal : null,
+      benchmarkLaborPct,
+    },
+    days,
+    byDepartment,
+    callouts: callouts.slice(0, 3),
+  };
+}
+
+const money0 = (v: number) => `$${Math.round(Math.abs(v)).toLocaleString("en-US")}`;

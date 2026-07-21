@@ -17,6 +17,7 @@ type Batch = {
     days?: Record<string, unknown>[];
     labor?: Record<string, unknown>[];
     bookings?: Record<string, unknown>[];
+    shifts?: Record<string, unknown>[];
   } | null;
 };
 
@@ -76,6 +77,7 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
   const days = p.days ?? [];
   const labor = p.labor ?? [];
   const bookings = p.bookings ?? [];
+  const shifts = p.shifts ?? [];
 
   return (
     <div className="card overflow-hidden">
@@ -128,6 +130,25 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
                   { key: "regularHours", label: "Reg h" },
                   { key: "otHours", label: "OT h" },
                   { key: "paidTotal", label: "Paid", money: true },
+                ]}
+              />
+            </div>
+          )}
+          {shifts.length > 0 && (
+            <div className="mb-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Scheduled shifts · {shifts.length}</div>
+              <PreviewTable
+                rows={shifts}
+                cols={[
+                  { key: "date", label: "Date" },
+                  { key: "department", label: "Dept" },
+                  { key: "position", label: "Position" },
+                  { key: "firstName", label: "First" },
+                  { key: "lastName", label: "Last" },
+                  { key: "startTime", label: "Start" },
+                  { key: "endTime", label: "End" },
+                  { key: "scheduledHours", label: "Hours" },
+                  { key: "hourlyRate", label: "Rate", money: true },
                 ]}
               />
             </div>
@@ -272,7 +293,7 @@ export function ImportDropzone() {
             <UploadCloud className="mb-2 h-8 w-8 text-brand" />
             <div className="text-sm font-medium text-ink">Drop an export here — or click to choose</div>
             <div className="mt-1 text-xs text-ink-3">
-              Caterease query · CaterTrax report · When I Work timesheet · daily tracker — XLSX, CSV, PDF, or screenshot
+              Caterease query · CaterTrax report · When I Work timesheet or schedule · daily tracker — XLSX, CSV, PDF, or screenshot
             </div>
           </>
         )}

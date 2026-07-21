@@ -1,11 +1,11 @@
-import { getLaborAnalysis, getLaborDetail, getForwardPlanning } from "@/lib/dashboard";
+import { getLaborAnalysis, getLaborDetail, getForwardPlanning, getStaffingOutlook } from "@/lib/dashboard";
 import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
 import { DeptFilter } from "@/components/DeptFilter";
 import { RangePicker } from "@/components/RangePicker";
 import { DepartmentTable, EmployeeTable } from "@/components/LaborTables";
 import { ComparisonPanels } from "@/components/Comparisons";
-import { ForwardCoverage } from "@/components/ForwardCoverage";
+import { StaffingOutlookPanel } from "@/components/StaffingOutlookPanel";
 import { EmployeeAnomalies } from "@/components/EmployeeAnomalies";
 import { LaborTrendChart } from "@/components/charts";
 import { Card, SectionHeader, ChartLegend, Sparkline, Delta } from "@/components/primitives";
@@ -57,10 +57,11 @@ export default async function LaborPage({
   searchParams: Promise<{ dept?: string; from?: string; to?: string }>;
 }) {
   const { dept, from, to } = await searchParams;
-  const [a, detail, fp] = await Promise.all([
+  const [a, detail, fp, staffing] = await Promise.all([
     getLaborAnalysis({ from, to }),
     getLaborDetail(dept),
     getForwardPlanning(),
+    getStaffingOutlook(),
   ]);
 
   const weeklySpark = a.weekly.filter((w) => w.actualLabor != null).map((w) => w.actualLabor!);
@@ -100,9 +101,9 @@ export default async function LaborPage({
         />
       </div>
 
-      {/* Forward planning — capacity vs demand, events, future capacity */}
+      {/* Staffing outlook — real imported schedule vs typical staffing */}
       <div className="mt-4">
-        <ForwardCoverage fp={fp} />
+        <StaffingOutlookPanel so={staffing} />
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">

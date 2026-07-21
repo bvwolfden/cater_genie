@@ -1,4 +1,5 @@
-import { getDashboard, getPulse } from "@/lib/dashboard";
+import { getDashboard, getPulse, getStaffingOutlook } from "@/lib/dashboard";
+import { StaffingCallout } from "@/components/StaffingCallout";
 import { getInsight } from "@/lib/insights";
 import { getDataQuality } from "@/lib/quality";
 import { DataQualityPanel } from "@/components/DataQualityPanel";
@@ -30,10 +31,11 @@ export default async function Page({
   searchParams: Promise<{ date?: string; from?: string; to?: string; period?: string; qbo?: string }>;
 }) {
   const { date, from, to, period, qbo } = await searchParams;
-  const [data, pulse, quality] = await Promise.all([
+  const [data, pulse, quality, staffing] = await Promise.all([
     getDashboard({ date, from, to, period }),
     getPulse(),
     getDataQuality(),
+    getStaffingOutlook(),
   ]);
   const insight = await getInsight(data);
 
@@ -76,6 +78,13 @@ export default async function Page({
       )}
 
       <Kpis data={data} />
+
+      {/* Staffing highlight — over/under-staffed days in the imported schedule */}
+      {staffing && (
+        <div className="mt-4">
+          <StaffingCallout so={staffing} />
+        </div>
+      )}
 
       {/* Hero: pulse of the business */}
       <div className="mt-4">
