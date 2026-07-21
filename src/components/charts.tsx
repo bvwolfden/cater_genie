@@ -184,28 +184,47 @@ export function WeeklyCompChart({
   data: { weekStart: string; total: number | null; priorYear: number | null; projected: number | null }[];
 }) {
   const rows = data.slice(-16);
+  // Last actual week — where the solid line hands off to the dashed projection.
+  const boundary = [...rows].reverse().find((r) => r.total != null && r.projected != null)?.weekStart ?? null;
   return (
     <ResponsiveContainer width="100%" height={260}>
       <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid stroke={GRID} vertical={false} />
         <XAxis dataKey="weekStart" tickFormatter={(d) => shortDate(d)} tick={AXIS} tickLine={false} axisLine={false} minTickGap={20} />
         <YAxis tickFormatter={(v) => moneyCompact(v)} tick={AXIS} tickLine={false} axisLine={false} width={52} />
+        {boundary && <ReferenceLine x={boundary} stroke="#C2C2C2" strokeDasharray="3 3" label={{ value: "today", position: "top", fill: "#A6A6A6", fontSize: 10 }} />}
         <Tooltip
           cursor={{ fill: "rgba(255,56,92,0.05)" }}
-          content={({ active, payload, label }) =>
-            active && payload?.length ? (
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            const p = payload[0].payload as { total: number | null; priorYear: number | null; projected: number | null };
+            const isProjected = p.total == null && p.projected != null;
+            const value = isProjected ? p.projected : p.total;
+            const yoy = value != null && p.priorYear ? value / p.priorYear - 1 : null;
+            return (
               <Box>
-                <div className="mb-1 font-semibold text-ink">Week of {shortDate(label as string)}</div>
-                <div className="text-brand">Revenue {money(payload[0]?.payload.total)}</div>
-                <div className="text-ink-2">Prior yr {money(payload[0]?.payload.priorYear)}</div>
-                <div className="text-amber">Projected {money(payload[0]?.payload.projected)}</div>
+                <div className="mb-1 font-semibold text-ink">
+                  Week of {shortDate(label as string)} {isProjected && <span className="text-ink-3">· projected</span>}
+                </div>
+                {isProjected ? (
+                  <div className="text-amber">Projected {money(p.projected)}</div>
+                ) : (
+                  <div className="text-brand">Revenue {money(p.total)}</div>
+                )}
+                <div className="text-ink-2">Prior yr {money(p.priorYear)}</div>
+                {yoy != null && (
+                  <div className={yoy >= 0 ? "text-mint" : "text-brand"}>
+                    {yoy >= 0 ? "+" : ""}{percent(yoy)} vs prior yr
+                  </div>
+                )}
               </Box>
-            ) : null
-          }
+            );
+          }}
         />
         <Bar dataKey="total" fill={CORAL} radius={[5, 5, 0, 0]} barSize={16} isAnimationActive={false} />
         <Line type="monotone" dataKey="priorYear" stroke="#A6A6A6" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
-        <Line type="monotone" dataKey="projected" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Line type="monotone" dataKey="total" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Line type="monotone" dataKey="projected" stroke={GOLD} strokeWidth={2} strokeDasharray="6 4" dot={false} isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
