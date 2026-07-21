@@ -57,19 +57,19 @@ enum SyncStatus {
 
 /// One canonical row per business day — what the dashboard reads first.
 model DailyMetric {
-  id            Int       @id @default(autoincrement())
-  date          DateTime  @unique @db.Date
+  id            Int          @id @default(autoincrement())
+  date          DateTime     @unique @db.Date
   weekLabel     String?
-  netSales      Decimal?  @db.Decimal(14, 2)
-  tax           Decimal?  @db.Decimal(14, 2)
-  laborCost     Decimal?  @db.Decimal(14, 2)
-  laborHours    Decimal?  @db.Decimal(10, 2)
-  laborPct      Decimal?  @db.Decimal(8, 5) // fraction: 0.27 = 27%
-  foodPurchases Decimal?  @db.Decimal(14, 2)
+  netSales      Decimal?     @db.Decimal(14, 2)
+  tax           Decimal?     @db.Decimal(14, 2)
+  laborCost     Decimal?     @db.Decimal(14, 2)
+  laborHours    Decimal?     @db.Decimal(10, 2)
+  laborPct      Decimal?     @db.Decimal(8, 5) // fraction: 0.27 = 27%
+  foodPurchases Decimal?     @db.Decimal(14, 2)
   notes         String?
   source        SourceSystem @default(SPREADSHEET)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   @@index([date])
 }
@@ -93,23 +93,23 @@ model DailySales {
 
 /// Per employee-day labor punch (When I Work / timesheet export).
 model LaborEntry {
-  id           Int          @id @default(autoincrement())
-  date         DateTime     @db.Date
-  employeeId   String?
-  firstName    String?
-  lastName     String?
-  department   String? // "schedule": Cater Hot, Cafe, Delivery, SALES...
-  position     String?
-  jobSite      String?
-  regularHours Decimal?     @db.Decimal(10, 2)
-  otHours      Decimal?     @db.Decimal(10, 2)
-  doubleOtHours Decimal?    @db.Decimal(10, 2)
-  hourlyRate   Decimal?     @db.Decimal(10, 2)
-  paidTotal    Decimal?     @db.Decimal(14, 2)
-  tips         Decimal?     @db.Decimal(14, 2)
-  earningsTotal Decimal?    @db.Decimal(14, 2)
-  source       SourceSystem @default(SPREADSHEET)
-  createdAt    DateTime     @default(now())
+  id            Int          @id @default(autoincrement())
+  date          DateTime     @db.Date
+  employeeId    String?
+  firstName     String?
+  lastName      String?
+  department    String? // "schedule": Cater Hot, Cafe, Delivery, SALES...
+  position      String?
+  jobSite       String?
+  regularHours  Decimal?     @db.Decimal(10, 2)
+  otHours       Decimal?     @db.Decimal(10, 2)
+  doubleOtHours Decimal?     @db.Decimal(10, 2)
+  hourlyRate    Decimal?     @db.Decimal(10, 2)
+  paidTotal     Decimal?     @db.Decimal(14, 2)
+  tips          Decimal?     @db.Decimal(14, 2)
+  earningsTotal Decimal?     @db.Decimal(14, 2)
+  source        SourceSystem @default(SPREADSHEET)
+  createdAt     DateTime     @default(now())
 
   @@index([date])
   @@index([department])
@@ -304,9 +304,9 @@ model EventBooking {
 /// the daily sync; assignment (driver) is Kevin's system of record and must
 /// SURVIVE sync re-upserts. Sync only clears assignment if the order moves days.
 model DeliveryStop {
-  id           Int      @id @default(autoincrement())
-  orderId      String   @unique
-  date         DateTime @db.Date
+  id           Int       @id @default(autoincrement())
+  orderId      String    @unique
+  date         DateTime  @db.Date
   // enrichment — sync-owned, refreshed each run (coversheet.asp)
   deliveryTime String? // "11:00 AM"
   addressRaw   String? // "501 Grant Street Suite 200"
@@ -318,8 +318,8 @@ model DeliveryStop {
   driverKey    String? // ScheduledShift employeeId, else "first last" lowercased
   assignedAt   DateTime?
   assignedBy   String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@index([date])
 }
@@ -343,29 +343,43 @@ model GeoPoint {
 /// the prediction is the "action", the next day's actual is the "measurement",
 /// and `errorPct` is the feedback fed back into future prompts.
 model Forecast {
-  id          Int      @id @default(autoincrement())
-  madeOnDate  DateTime @db.Date // the reporting day it was generated from (as-of)
-  targetDate  DateTime @db.Date // the day (or week-start) being predicted
-  horizon     String   @default("next_day") // next_day | next_week
-  mode        String   @default("live") // live | backtest
-  model       String?
-  context     Json? // snapshot of what the model saw — audit trail / no leakage
-  rationale   String? // why the model expects this
+  id         Int      @id @default(autoincrement())
+  madeOnDate DateTime @db.Date // the reporting day it was generated from (as-of)
+  targetDate DateTime @db.Date // the day (or week-start) being predicted
+  horizon    String   @default("next_day") // next_day | next_week
+  mode       String   @default("live") // live | backtest
+  model      String?
+  context    Json? // snapshot of what the model saw — audit trail / no leakage
+  rationale  String? // why the model expects this
 
   predNetSales     Decimal? @db.Decimal(14, 2)
   predLaborPct     Decimal? @db.Decimal(8, 5)
   baselineNetSales Decimal? @db.Decimal(14, 2) // deterministic projection, for comparison
 
   // Ground truth, filled in when the actual day closes.
-  actualNetSales Decimal?  @db.Decimal(14, 2)
-  actualLaborPct Decimal?  @db.Decimal(8, 5)
-  errorPct       Decimal?  @db.Decimal(10, 5) // signed (pred-actual)/actual on net sales
-  absErrorPct    Decimal?  @db.Decimal(10, 5)
-  baselineErrorPct Decimal? @db.Decimal(10, 5) // signed error of the deterministic baseline
-  scoredAt       DateTime?
+  actualNetSales   Decimal?  @db.Decimal(14, 2)
+  actualLaborPct   Decimal?  @db.Decimal(8, 5)
+  errorPct         Decimal?  @db.Decimal(10, 5) // signed (pred-actual)/actual on net sales
+  absErrorPct      Decimal?  @db.Decimal(10, 5)
+  baselineErrorPct Decimal?  @db.Decimal(10, 5) // signed error of the deterministic baseline
+  scoredAt         DateTime?
 
   createdAt DateTime @default(now())
 
   @@unique([madeOnDate, horizon, mode])
   @@index([targetDate, horizon, mode])
+}
+
+/// Per-user, per-tab card canvas layout (which cards are on the canvas, in
+/// what order, at what width). userId is a Clerk id, or "default" when auth
+/// is disabled. No row = the code-default layout in src/lib/canvas/registry.ts.
+model UserLayout {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  tab       String // "overview" | "labor" | "bookings" | "delivery"
+  layout    Json // { version: 1, cards: [{ id: string, span?: number }] } — ordered; hidden cards absent
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, tab])
 }

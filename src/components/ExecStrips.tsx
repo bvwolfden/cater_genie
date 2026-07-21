@@ -170,5 +170,5 @@ export function ExecStrips({
   ].filter(Boolean);
 
   if (!strips.length) return null;
-  return <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3">{strips}</div>;
+  return <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">{strips}</div>;
 }
