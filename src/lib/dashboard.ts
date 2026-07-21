@@ -416,22 +416,48 @@ export async function getDashboard(opts?: {
   if (latestDate) {
     const lookback = addDays(latestDate, -27);
     const recentDays = series.filter((d) => d.date > lookback && d.date <= latestDate && d.netSales != null);
+    // Per-weekday averages for sales, labor $, and hours. Labor is mostly a
+    // scheduled/fixed cost per weekday (a slow Monday still staffs the kitchen),
+    // so it is projected from weekday labor history — NOT as a % of sales.
     const byDow = new Map<number, number[]>();
+    const byDowLabor = new Map<number, number[]>();
+    const byDowHours = new Map<number, number[]>();
+    const push = (m: Map<number, number[]>, k: number, v: number) => {
+      const arr = m.get(k);
+      if (arr) arr.push(v);
+      else m.set(k, [v]);
+    };
     for (const d of recentDays) {
       const dow = new Date(`${d.date}T00:00:00Z`).getUTCDay();
-      const arr = byDow.get(dow);
-      if (arr) arr.push(d.netSales!);
-      else byDow.set(dow, [d.netSales!]);
+      push(byDow, dow, d.netSales!);
+      if (d.laborCost != null) push(byDowLabor, dow, d.laborCost);
+      if (d.laborHours != null) push(byDowHours, dow, d.laborHours);
     }
+    const avg = (m: Map<number, number[]>, k: number): number | null => {
+      const arr = m.get(k);
+      return arr?.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+    };
+    // Blended ratio only as a fallback for weekdays with no labor history.
     let lp = 0, ls = 0;
     for (const d of recentDays) if (d.laborCost != null && d.netSales) { lp += d.laborCost; ls += d.netSales; }
     const dailyLaborPct = ls ? lp / ls : 0.2;
     for (let i = 1; i <= 10; i++) {
       const dt = addDays(latestDate, i);
       const dow = new Date(`${dt}T00:00:00Z`).getUTCDay();
-      const arr = byDow.get(dow) ?? [];
-      const ns = arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
-      forwardDays.push({ date: dt, netSales: ns, tax: null, laborCost: ns != null ? Math.round(ns * dailyLaborPct) : null, laborHours: null, laborPct: dailyLaborPct, foodPurchases: null });
+      const nsAvg = avg(byDow, dow);
+      const ns = nsAvg != null ? Math.round(nsAvg) : null;
+      const lcAvg = avg(byDowLabor, dow);
+      const lc = lcAvg != null ? Math.round(lcAvg) : ns != null ? Math.round(ns * dailyLaborPct) : null;
+      const lhAvg = avg(byDowHours, dow);
+      forwardDays.push({
+        date: dt,
+        netSales: ns,
+        tax: null,
+        laborCost: lc,
+        laborHours: lhAvg != null ? Math.round(lhAvg * 10) / 10 : null,
+        laborPct: ns && lc != null ? lc / ns : null,
+        foodPurchases: null,
+      });
     }
   }
 
