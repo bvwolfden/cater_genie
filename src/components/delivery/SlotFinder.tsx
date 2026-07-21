@@ -52,17 +52,21 @@ export function SlotFinder({
   roster: RosterDriver[];
   dayDriverKeys: string[];
 }) {
+  const router = useRouter();
   const [company, setCompany] = useState("");
   const [time, setTime] = useState("");
   const [extra, setExtra] = useState<RosterDriver[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [booked, setBooked] = useState<string | null>(null);
+  const [pendingSlot, setPendingSlot] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const addable = roster.filter((r) => !dayDriverKeys.includes(r.key) && !extra.some((e) => e.key === r.key));
 
   const search = (extraNow: RosterDriver[] = extra) => {
     setError(null);
+    setBooked(null);
     startTransition(async () => {
       const r = await fetch("/api/delivery/feasibility", {
         method: "POST",
@@ -93,6 +97,33 @@ export function SlotFinder({
     const next = extra.filter((e) => e.key !== key);
     setExtra(next);
     if (result) search(next);
+  };
+
+  /** Click a window → pencil the drop onto the board with that driver assigned. */
+  const pencilIn = (s: Suggestion) => {
+    if (!company.trim()) {
+      setError("Type the business name first — the drop needs a name on the board.");
+      return;
+    }
+    setError(null);
+    setPendingSlot(`${s.timeLabel}·${s.driverKey}`);
+    startTransition(async () => {
+      const r = await fetch("/api/delivery/pencil", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, company: company.trim(), time: s.timeLabel, driverKey: s.driverKey }),
+      }).catch(() => null);
+      setPendingSlot(null);
+      if (!r?.ok) {
+        setError("Couldn't pencil that in — try again.");
+        return;
+      }
+      setBooked(
+        `${company.trim()} penciled in at ${s.timeLabel} under ${s.driverName} — it's on the board below and will clear automatically when the real CaterTrax order syncs in.`
+      );
+      setResult(null);
+      router.refresh();
+    });
   };
 
   return (
@@ -167,6 +198,12 @@ export function SlotFinder({
       )}
 
       {error && <p className="mt-2 text-[12px] text-rose">{error}</p>}
+      {booked && (
+        <p className="mt-2 flex items-start gap-1.5 text-[12px] text-mint">
+          <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          {booked}
+        </p>
+      )}
 
       {result && (
         <div className="mt-3 space-y-3">
@@ -201,18 +238,32 @@ export function SlotFinder({
               <div className="flex flex-wrap gap-1.5">
                 {result.alternatives.map((s, i) => {
                   const whatIf = result.modeledKeys?.includes(s.driverKey);
+                  if (whatIf) {
+                    return (
+                      <span
+                        key={i}
+                        title={`${s.reason} (only if ${s.driverName} gets a shift that day — can't be booked yet)`}
+                        className="pill border border-amber/40 bg-amber/10 px-2.5 py-1 text-[12px] font-medium text-amber"
+                      >
+                        {s.timeLabel} · {s.driverName} · what-if
+                      </span>
+                    );
+                  }
+                  const busy = pendingSlot === `${s.timeLabel}·${s.driverKey}`;
                   return (
-                    <span
+                    <button
                       key={i}
-                      title={whatIf ? `${s.reason} (only if ${s.driverName} gets a shift that day)` : s.reason}
+                      onClick={() => pencilIn(s)}
+                      disabled={pending}
+                      title={`${s.reason} Click to pencil this drop onto the board under ${s.driverName}.`}
                       className={cn(
-                        "pill border px-2.5 py-1 text-[12px] font-medium",
-                        whatIf ? "border-amber/40 bg-amber/10 text-amber" : "border-mint/40 bg-mint/10 text-mint"
+                        "pill border border-mint/40 bg-mint/10 px-2.5 py-1 text-[12px] font-medium text-mint transition hover:border-mint hover:bg-mint/20",
+                        busy && "opacity-60"
                       )}
                     >
-                      {s.timeLabel} · {s.driverName}
-                      {whatIf ? " · what-if" : ""}
-                    </span>
+                      <CalendarPlus className="h-3 w-3" />
+                      {busy ? "Penciling…" : `${s.timeLabel} · ${s.driverName}`}
+                    </button>
                   );
                 })}
               </div>
@@ -223,14 +274,14 @@ export function SlotFinder({
             )}
             {result.alternatives.length > 0 && (
               <p className="mt-1.5 text-[11px] text-ink-3">
-                Hover a window for the why (which drops it fits between).
+                Hover a window for the why (which drops it fits between). Click one to pencil the drop onto the board with that driver assigned.
                 {result.modeledKeys?.length ? " Amber windows exist only if the what-if driver actually gets scheduled." : ""}
               </p>
             )}
           </div>
         </div>
       )}
-      {!result && (
+      {!result && !booked && (
         <p className="mt-2 flex items-center gap-1.5 text-[12px] text-ink-3">
           <PhoneCall className="h-3.5 w-3.5" />
           Someone on the phone? Type their business, pick the day above, and see what you can promise.

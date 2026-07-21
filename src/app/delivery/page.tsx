@@ -9,6 +9,7 @@ import { Nav } from "@/components/Nav";
 import { Card, SectionHeader } from "@/components/primitives";
 import { Explain } from "@/components/Explain";
 import { AssignPicker } from "@/components/delivery/AssignPicker";
+import { PencilTag } from "@/components/delivery/PencilTag";
 import { MapPanel } from "@/components/delivery/MapPanel";
 import type { MapLane, MapStop } from "@/components/delivery/DeliveryMapInner";
 import { cn } from "@/lib/cn";
@@ -36,7 +37,10 @@ function StopRow({
       </span>
       <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tone ?? "#A6A6A6" }} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-ink">{s.company ?? s.building ?? `Order #${s.orderId}`}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium text-ink">{s.company ?? s.building ?? `Order #${s.orderId}`}</span>
+          {s.penciled && <PencilTag orderId={s.orderId} />}
+        </div>
         <div className="truncate text-[11px] text-ink-3">
           {s.building && s.building !== s.company ? `${s.building} · ` : ""}
           {s.address ?? "no address yet"}
