@@ -18,7 +18,16 @@ export interface PeriodComparison {
   laborPct: { current: number | null; prior: number | null };
 }
 
-export interface WeeklyKpis {
+export type PeriodKey = "day" | "week" | "month" | "quarter" | "ytd" | "custom";
+
+export interface PeriodKpis {
+  period: PeriodKey;
+  /** Human label of the current window, e.g. "Jul 13–19" or "July 2026 (MTD)". */
+  label: string;
+  /** Human label of the comparison window, e.g. "Jul 6–12" or "June 2026". */
+  priorLabel: string;
+  /** Noun for spark captions: "day" | "week" | "month" | ... */
+  sparkUnit: string;
   from: string | null;
   to: string | null;
   netSales: number;
@@ -82,7 +91,7 @@ export interface Dashboard {
     foodPurchasesPrev: number | null;
     monthLabel: string | null;
   };
-  weeklyKpis: WeeklyKpis;
+  periodKpis: PeriodKpis;
   forwardDays: DayPoint[];
   balances: Array<{
     account: AccountType;
@@ -130,6 +139,87 @@ const prevYm = (ym: string) => {
 const pctChange = (cur: number | null, prior: number | null) =>
   cur == null || prior == null || prior === 0 ? null : (cur - prior) / Math.abs(prior);
 
+const daysBetween = (a: string, b: string) =>
+  Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
+const fmtShort = (isoDt: string) =>
+  new Date(`${isoDt}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const monthName = (isoDt: string) =>
+  new Date(`${isoDt}T00:00:00Z`).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+const lastOfMonth = (ym: string) => {
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+};
+
+/** Resolve a reporting period anchored at `sd` into current + comparison
+ *  windows with human labels. Calendar periods are cut off at the anchor
+ *  ("to date") and compared to the same span of the prior calendar period;
+ *  YTD compares to the same span last year. */
+function resolvePeriod(
+  period: PeriodKey,
+  sd: string,
+  custom?: { from?: string | null; to?: string | null }
+): { from: string; to: string; priorFrom: string; priorTo: string; label: string; priorLabel: string; sparkUnit: string } {
+  const yr = sd.slice(0, 4);
+  switch (period) {
+    case "day":
+      return {
+        from: sd, to: sd, priorFrom: addDays(sd, -1), priorTo: addDays(sd, -1),
+        label: fmtShort(sd), priorLabel: `prior day (${fmtShort(addDays(sd, -1))})`, sparkUnit: "day",
+      };
+    case "month": {
+      const start = `${sd.slice(0, 7)}-01`;
+      const prevStart = `${prevYm(sd.slice(0, 7))}-01`;
+      const offset = daysBetween(start, sd);
+      const priorTo = [addDays(prevStart, offset), lastOfMonth(prevStart.slice(0, 7))].sort()[0];
+      const partial = sd < lastOfMonth(sd.slice(0, 7));
+      return {
+        from: start, to: sd, priorFrom: prevStart, priorTo,
+        label: `${monthName(sd)}${partial ? " (MTD)" : ""}`, priorLabel: monthName(prevStart), sparkUnit: "month",
+      };
+    }
+    case "quarter": {
+      const q = Math.floor((Number(sd.slice(5, 7)) - 1) / 3); // 0-3
+      const start = `${yr}-${String(q * 3 + 1).padStart(2, "0")}-01`;
+      const pq = q === 0 ? 3 : q - 1;
+      const pYr = q === 0 ? String(Number(yr) - 1) : yr;
+      const prevStart = `${pYr}-${String(pq * 3 + 1).padStart(2, "0")}-01`;
+      const prevEndYm = `${pYr}-${String(pq * 3 + 3).padStart(2, "0")}`;
+      const offset = daysBetween(start, sd);
+      const priorTo = [addDays(prevStart, offset), lastOfMonth(prevEndYm)].sort()[0];
+      return {
+        from: start, to: sd, priorFrom: prevStart, priorTo,
+        label: `Q${q + 1} ${yr} (QTD)`, priorLabel: `Q${pq + 1} ${pYr}`, sparkUnit: "quarter",
+      };
+    }
+    case "ytd": {
+      const md = sd.slice(5) === "02-29" ? "02-28" : sd.slice(5);
+      const pYr = String(Number(yr) - 1);
+      return {
+        from: `${yr}-01-01`, to: sd, priorFrom: `${pYr}-01-01`, priorTo: `${pYr}-${md}`,
+        label: `${yr} YTD (thru ${fmtShort(sd)})`, priorLabel: `${pYr} same period`, sparkUnit: "month",
+      };
+    }
+    case "custom": {
+      const to = custom?.to || sd;
+      const from = custom?.from && custom.from <= to ? custom.from : addDays(to, -6);
+      const len = daysBetween(from, to) + 1;
+      return {
+        from, to, priorFrom: addDays(from, -len), priorTo: addDays(from, -1),
+        label: `${fmtShort(from)} – ${fmtShort(to)}`,
+        priorLabel: `prior ${len} days (${fmtShort(addDays(from, -len))} – ${fmtShort(addDays(from, -1))})`,
+        sparkUnit: `${len}-day`,
+      };
+    }
+    case "week":
+    default:
+      return {
+        from: addDays(sd, -6), to: sd, priorFrom: addDays(sd, -13), priorTo: addDays(sd, -7),
+        label: `Week ${fmtShort(addDays(sd, -6))} – ${fmtShort(sd)}`,
+        priorLabel: `week ${fmtShort(addDays(sd, -13))} – ${fmtShort(addDays(sd, -7))}`, sparkUnit: "week",
+      };
+  }
+}
+
 // Monthly aggregation of weekly rollups (2026 calendar months only).
 type MonthAgg = { s26: number; s25: number; l26: number; l25: number; l24: number; weeks: number };
 const emptyMonth = (): MonthAgg => ({ s26: 0, s25: 0, l26: 0, l25: 0, l24: 0, weeks: 0 });
@@ -166,8 +256,14 @@ export async function getDashboard(opts?: {
   date?: string;
   from?: string;
   to?: string;
+  period?: string;
 }): Promise<Dashboard> {
   const targetDate = opts?.date;
+  const periodKey: PeriodKey = (["day", "week", "month", "quarter", "ytd", "custom"] as const).includes(
+    opts?.period as PeriodKey
+  )
+    ? (opts?.period as PeriodKey)
+    : "week";
   const [metrics, balanceRows, deptGroups, channelRows, rollupRows, deptEmp] =
     await Promise.all([
       prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
@@ -197,12 +293,13 @@ export async function getDashboard(opts?: {
   const availableDates = withSales.map((d) => d.date);
   const overallLatest = withSales[withSales.length - 1] ?? null;
   // Anchor the "reporting day" to targetDate (latest day on/before it) or to
-  // the most recent day with data.
+  // the most recent day with data. A custom period anchors to its end date.
+  const effTarget = targetDate || (periodKey === "custom" ? opts?.to : undefined);
   let anchorIdx = withSales.length - 1;
-  if (targetDate) {
+  if (effTarget) {
     anchorIdx = -1;
     for (let i = 0; i < withSales.length; i++) {
-      if (withSales[i].date <= targetDate) anchorIdx = i;
+      if (withSales[i].date <= effTarget) anchorIdx = i;
     }
     if (anchorIdx < 0) anchorIdx = withSales.length - 1;
   }
@@ -210,6 +307,10 @@ export async function getDashboard(opts?: {
   const prev = anchorIdx > 0 ? withSales[anchorIdx - 1] : null;
   const latestDate = overallLatest?.date ?? null;
   const selectedDate = latest?.date ?? null;
+  // Reporting period (KPIs + default chart window) anchored at the selected day.
+  const per = selectedDate
+    ? resolvePeriod(periodKey, selectedDate, { from: opts?.from, to: opts?.to })
+    : null;
 
   // Month-to-date relative to the selected reporting day.
   let mtd = { net: 0, labor: 0, hours: 0, count: 0 };
@@ -360,9 +461,13 @@ export async function getDashboard(opts?: {
     };
   });
 
-  // --- Date range (sales & labor) -----------------------------------------
-  let rangeTo = opts?.to || selectedDate || latestDate;
-  let rangeFrom = opts?.from || (rangeTo ? addDays(rangeTo, -29) : null);
+  // --- Date range (sales & labor chart) -----------------------------------
+  // Explicit from/to (RangePicker) wins; otherwise calendar periods drive the
+  // chart window, and day/week fall back to 30 days of context.
+  const periodDrivesChart = per && ["month", "quarter", "ytd", "custom"].includes(per ? periodKey : "");
+  let rangeTo = opts?.to || per?.to || selectedDate || latestDate;
+  let rangeFrom =
+    opts?.from || (periodDrivesChart ? per!.from : rangeTo ? addDays(rangeTo, -29) : null);
   if (rangeFrom && rangeTo && rangeFrom > rangeTo) [rangeFrom, rangeTo] = [rangeTo, rangeFrom];
   const rangeSeries = series.filter(
     (d) => (!rangeFrom || d.date >= rangeFrom) && (!rangeTo || d.date <= rangeTo)
@@ -392,33 +497,37 @@ export async function getDashboard(opts?: {
     }
     return v;
   };
-  const sd = selectedDate;
-  let weeklyKpis: WeeklyKpis;
-  if (sd) {
-    const tFrom = addDays(sd, -6), tTo = sd;
-    const lFrom = addDays(sd, -13), lTo = addDays(sd, -7);
+  let periodKpis: PeriodKpis;
+  if (per) {
+    const { from: tFrom, to: tTo, priorFrom: lFrom, priorTo: lTo } = per;
     const net = sumRange(tFrom, tTo, (d) => d.netSales);
     const netP = sumRange(lFrom, lTo, (d) => d.netSales);
     const lab = sumRange(tFrom, tTo, (d) => d.laborCost);
     const labP = sumRange(lFrom, lTo, (d) => d.laborCost);
-    const weekSpark = (pick: (d: DayPoint) => number | null) => {
+    // Sparklines: 8 trailing windows of the period's length ending at `to`.
+    const winLen = daysBetween(tFrom, tTo) + 1;
+    const sparkOf = (pick: (d: DayPoint) => number | null) => {
       const out: number[] = [];
       for (let w = 7; w >= 0; w--) {
-        const to = addDays(sd, -7 * w);
-        out.push(sumRange(addDays(to, -6), to, pick));
+        const to = addDays(tTo, -winLen * w);
+        out.push(sumRange(addDays(to, -(winLen - 1)), to, pick));
       }
       return out;
     };
     const laborPctSpark: number[] = [];
     const cashSpark: number[] = [];
     for (let w = 7; w >= 0; w--) {
-      const to = addDays(sd, -7 * w);
-      const s = sumRange(addDays(to, -6), to, (d) => d.netSales);
-      const l = sumRange(addDays(to, -6), to, (d) => d.laborCost);
+      const to = addDays(tTo, -winLen * w);
+      const s = sumRange(addDays(to, -(winLen - 1)), to, (d) => d.netSales);
+      const l = sumRange(addDays(to, -(winLen - 1)), to, (d) => d.laborCost);
       laborPctSpark.push(s ? l / s : 0);
       cashSpark.push(cashAsOf(to) ?? 0);
     }
-    weeklyKpis = {
+    periodKpis = {
+      period: periodKey,
+      label: per.label,
+      priorLabel: per.priorLabel,
+      sparkUnit: per.sparkUnit,
       from: tFrom, to: tTo,
       netSales: net, netSalesPrev: netP,
       laborCost: lab,
@@ -430,10 +539,10 @@ export async function getDashboard(opts?: {
       foodPrev: sumRange(lFrom, lTo, (d) => d.foodPurchases),
       cash: cashAsOf(tTo),
       cashPrev: cashAsOf(lTo),
-      spark: { net: weekSpark((d) => d.netSales), laborPct: laborPctSpark, hours: weekSpark((d) => d.laborHours), food: weekSpark((d) => d.foodPurchases), cash: cashSpark },
+      spark: { net: sparkOf((d) => d.netSales), laborPct: laborPctSpark, hours: sparkOf((d) => d.laborHours), food: sparkOf((d) => d.foodPurchases), cash: cashSpark },
     };
   } else {
-    weeklyKpis = { from: null, to: null, netSales: 0, netSalesPrev: 0, laborCost: 0, laborPct: null, laborPctPrev: null, hours: 0, hoursPrev: 0, food: 0, foodPrev: 0, cash: null, cashPrev: null, spark: { net: [], laborPct: [], hours: [], food: [], cash: [] } };
+    periodKpis = { period: periodKey, label: "", priorLabel: "", sparkUnit: "week", from: null, to: null, netSales: 0, netSalesPrev: 0, laborCost: 0, laborPct: null, laborPctPrev: null, hours: 0, hoursPrev: 0, food: 0, foodPrev: 0, cash: null, cashPrev: null, spark: { net: [], laborPct: [], hours: [], food: [], cash: [] } };
   }
 
   // --- Forward Daily Ledger: project next 10 days from weekday seasonality --
@@ -541,7 +650,7 @@ export async function getDashboard(opts?: {
       foodPurchasesPrev: prev?.foodPurchases ?? null,
       monthLabel,
     },
-    weeklyKpis,
+    periodKpis,
     forwardDays,
     balances,
     laborByDept,

@@ -4,7 +4,7 @@ import { getDataQuality } from "@/lib/quality";
 import { DataQualityPanel } from "@/components/DataQualityPanel";
 import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
-import { DatePicker } from "@/components/DatePicker";
+import { PeriodPicker } from "@/components/PeriodPicker";
 import { RangePicker } from "@/components/RangePicker";
 import { Kpis } from "@/components/Kpis";
 import { Balances } from "@/components/Balances";
@@ -27,11 +27,11 @@ export const dynamic = "force-dynamic";
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; from?: string; to?: string; qbo?: string }>;
+  searchParams: Promise<{ date?: string; from?: string; to?: string; period?: string; qbo?: string }>;
 }) {
-  const { date, from, to, qbo } = await searchParams;
+  const { date, from, to, period, qbo } = await searchParams;
   const [data, pulse, quality] = await Promise.all([
-    getDashboard({ date, from, to }),
+    getDashboard({ date, from, to, period }),
     getPulse(),
     getDataQuality(),
   ]);
@@ -46,7 +46,18 @@ export default async function Page({
   return (
     <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
       <Nav />
-      <Header control={<DatePicker selected={data.selectedDate} available={data.availableDates} />} />
+      <Header
+        control={
+          <PeriodPicker
+            period={data.periodKpis.period}
+            selected={data.selectedDate}
+            latest={data.latestDate}
+            first={data.availableDates[0] ?? null}
+            from={data.periodKpis.period === "custom" ? data.periodKpis.from : from ?? null}
+            to={data.periodKpis.period === "custom" ? data.periodKpis.to : to ?? null}
+          />
+        }
+      />
 
       {qbo && (
         <div

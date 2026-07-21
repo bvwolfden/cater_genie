@@ -14,6 +14,7 @@ function StatCard({
   deltaUpIsGood = true,
   spark,
   sparkColor = "#FF385C",
+  sparkCaption,
 }: {
   label: string;
   value: string;
@@ -24,6 +25,7 @@ function StatCard({
   deltaUpIsGood?: boolean;
   spark: number[];
   sparkColor?: string;
+  sparkCaption: string;
 }) {
   return (
     <Card className="card-pad animate-fade-up overflow-hidden">
@@ -38,16 +40,17 @@ function StatCard({
       </div>
       <div className="mt-2">
         <Sparkline data={spark} stroke={sparkColor} fill={`${sparkColor}1f`} />
-        <div className="mt-0.5 text-[10px] text-ink-3">weekly · last 8 wks</div>
+        <div className="mt-0.5 text-[10px] text-ink-3">{sparkCaption}</div>
       </div>
     </Card>
   );
 }
 
 export function Kpis({ data }: { data: Dashboard }) {
-  const w = data.weeklyKpis;
+  const w = data.periodKpis;
   const k = data.kpis;
-  const wkLabel = w.from && w.to ? `${shortDate(w.from)}–${shortDate(w.to)}` : "this week";
+  const vsPrior = `vs ${w.priorLabel}`;
+  const sparkCaption = `by ${w.sparkUnit} · last 8`;
   const tone = laborHealth(w.laborPct);
   const laborAccent = tone === "alert" ? "text-rose" : tone === "warn" ? "text-amber" : "text-mint";
   const mom = data.comparisons.mom;
@@ -55,36 +58,39 @@ export function Kpis({ data }: { data: Dashboard }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
       <StatCard
-        label="Net Sales · This Week"
+        label={`Net Sales · ${w.label}`}
         value={money(w.netSales)}
         icon={<DollarSign className="h-4 w-4" />}
         deltaValue={deltaPct(w.netSales, w.netSalesPrev)}
-        deltaLabel="vs last week"
+        deltaLabel={vsPrior}
         spark={w.spark.net}
         sparkColor="#FF385C"
+        sparkCaption={sparkCaption}
       />
 
       <StatCard
-        label="Labor % · This Week"
+        label={`Labor % · ${w.label}`}
         value={percent(w.laborPct)}
         icon={<Users className="h-4 w-4" />}
         accent={laborAccent}
         deltaValue={deltaPct(w.laborPct, w.laborPctPrev)}
-        deltaLabel="vs last week"
+        deltaLabel={vsPrior}
         deltaUpIsGood={false}
         spark={w.spark.laborPct}
         sparkColor="#FFB400"
+        sparkCaption={sparkCaption}
       />
 
       <StatCard
-        label="Hours · This Week"
+        label={`Hours · ${w.label}`}
         value={hours(w.hours)}
         icon={<Clock className="h-4 w-4" />}
         deltaValue={deltaPct(w.hours, w.hoursPrev)}
-        deltaLabel="vs last week"
+        deltaLabel={vsPrior}
         deltaUpIsGood={false}
         spark={w.spark.hours}
         sparkColor="#008489"
+        sparkCaption={sparkCaption}
       />
 
       <StatCard
@@ -95,6 +101,7 @@ export function Kpis({ data }: { data: Dashboard }) {
         deltaLabel={`vs ${mom.priorLabel}`}
         spark={w.spark.net}
         sparkColor="#FF385C"
+        sparkCaption={sparkCaption}
       />
 
       <StatCard
@@ -103,20 +110,22 @@ export function Kpis({ data }: { data: Dashboard }) {
         icon={<Banknote className="h-4 w-4" />}
         accent={w.cash != null && w.cash < 0 ? "text-rose" : "text-ink"}
         deltaValue={deltaPct(w.cash, w.cashPrev)}
-        deltaLabel="vs last week"
+        deltaLabel={vsPrior}
         spark={w.spark.cash}
         sparkColor="#00A699"
+        sparkCaption={sparkCaption}
       />
 
       <StatCard
-        label="Food Purchases · This Week"
+        label={`Food · ${w.label}`}
         value={money(w.food)}
         icon={<Utensils className="h-4 w-4" />}
         deltaValue={deltaPct(w.food, w.foodPrev)}
-        deltaLabel="vs last week"
+        deltaLabel={vsPrior}
         deltaUpIsGood={false}
         spark={w.spark.food}
         sparkColor="#FFB400"
+        sparkCaption={sparkCaption}
       />
     </div>
   );

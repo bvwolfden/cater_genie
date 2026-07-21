@@ -33,6 +33,7 @@ export function RangePicker({
     else q.delete("to");
     const qs = q.toString();
     router.push(qs ? `${basePath}?${qs}` : basePath);
+    router.refresh();
   }
 
   const presets: { key: string; label: string; from: string }[] = anchor
