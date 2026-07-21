@@ -67,7 +67,7 @@ export function DailyLedger({ data }: { data: Dashboard }) {
                   key={d.date}
                   className={cn(
                     "border-b border-line/70 last:border-0",
-                    isSelected ? "bg-brand/5" : d.projected ? "bg-canvas-700/40 italic text-ink-2" : "hover:bg-canvas-700"
+                    isSelected ? "bg-brand/5" : d.projected ? "bg-amber/5 italic text-ink-2" : "hover:bg-canvas-700"
                   )}
                 >
                   <td className="py-2.5 font-medium text-ink">
@@ -94,7 +94,7 @@ export function DailyLedger({ data }: { data: Dashboard }) {
           const pctColor = tone === "alert" ? "text-rose" : tone === "warn" ? "text-amber" : "text-mint";
           const isSelected = d.date === data.selectedDate;
           return (
-            <div key={d.date} className={cn("rounded-xl border border-line p-3", isSelected ? "bg-brand/5" : d.projected ? "bg-canvas-700/40" : "bg-canvas-700")}>
+            <div key={d.date} className={cn("rounded-xl border border-line p-3", isSelected ? "bg-brand/5" : d.projected ? "bg-amber/5 italic" : "bg-canvas-700")}>
               <div className="flex items-center justify-between">
                 <span className={cn("font-medium text-ink", d.projected && "italic")}>
                   {weekdayDate(d.date)}
