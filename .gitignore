@@ -36,3 +36,4 @@ tsconfig.tsbuildinfo
 npm-debug.log*
 .vscode/*
 !.vscode/extensions.json
+.claude/
