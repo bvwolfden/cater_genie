@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { getDeliveryDay, getDeliveryDates, type DeliveryStopView } from "@/lib/delivery";
+import { getDeliveryDay, getDeliveryDates, getKnownCustomers, type DeliveryStopView } from "@/lib/delivery";
+import { SlotFinder } from "@/components/delivery/SlotFinder";
 import { driverColor } from "@/lib/delivery-palette";
 import { SERVICE_MIN, SPACING_MIN } from "@/lib/routing";
 import { money, shortDate, weekdayDate } from "@/lib/format";
@@ -7,6 +8,9 @@ import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
 import { Card, SectionHeader } from "@/components/primitives";
 import { Explain } from "@/components/Explain";
+import { AssignPicker } from "@/components/delivery/AssignPicker";
+import { MapPanel } from "@/components/delivery/MapPanel";
+import type { MapLane, MapStop } from "@/components/delivery/DeliveryMapInner";
 import { cn } from "@/lib/cn";
 import { Truck, TriangleAlert, MapPin, UploadCloud } from "lucide-react";
 
@@ -14,7 +18,17 @@ export const dynamic = "force-dynamic";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
-function StopRow({ s, tone }: { s: DeliveryStopView; tone?: string }) {
+function StopRow({
+  s,
+  tone,
+  date,
+  drivers,
+}: {
+  s: DeliveryStopView;
+  tone?: string;
+  date: string;
+  drivers: Array<{ key: string; name: string }>;
+}) {
   return (
     <div className="flex items-center gap-3 py-2">
       <span className={cn("w-16 shrink-0 text-right text-sm font-semibold tabular-nums", s.timeLabel ? "text-ink" : "text-ink-3")}>
@@ -33,16 +47,42 @@ function StopRow({ s, tone }: { s: DeliveryStopView; tone?: string }) {
         <div className="text-sm tabular-nums text-ink-2">{s.guests != null ? `${s.guests}g` : "—"}</div>
         <div className="text-[11px] tabular-nums text-ink-3">{money(s.revenue)}</div>
       </div>
+      {drivers.length > 0 && <AssignPicker orderId={s.orderId} date={date} driverKey={s.driverKey} drivers={drivers} />}
     </div>
   );
 }
 
 export default async function DeliveryPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const sp = await searchParams;
-  const dates = await getDeliveryDates(14);
+  const [dates, customers] = await Promise.all([getDeliveryDates(14), getKnownCustomers()]);
   const fallback = dates.find((d) => d.drops > 0)?.date ?? todayISO();
   const dateISO = sp.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : fallback;
   const day = await getDeliveryDay(dateISO);
+
+  const drivers = day.lanes.map((l) => ({ key: l.key, name: l.name }));
+  const laneIndexByKey = new Map(day.lanes.map((l, i) => [l.key, i]));
+  const allStops = [...day.lanes.flatMap((l) => l.stops), ...day.unassigned];
+  const mapStops: MapStop[] = allStops
+    .filter((s) => s.latLng)
+    .map((s) => ({
+      orderId: s.orderId,
+      label: s.company ?? s.building ?? `#${s.orderId}`,
+      timeLabel: s.timeLabel,
+      address: s.address,
+      lat: s.latLng!.lat,
+      lng: s.latLng!.lng,
+      laneIndex: s.driverKey != null ? laneIndexByKey.get(s.driverKey) ?? null : null,
+    }));
+  const mapLanes: MapLane[] = day.lanes
+    .map((l, i) => ({
+      name: l.name,
+      index: i,
+      path: [
+        [day.depot.lat, day.depot.lng] as [number, number],
+        ...l.stops.filter((s) => s.latLng).sort((a, b) => (a.timeMin ?? 0) - (b.timeMin ?? 0)).map((s) => [s.latLng!.lat, s.latLng!.lng] as [number, number]),
+      ],
+    }))
+    .filter((l) => l.path.length > 1);
 
   return (
     <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
@@ -73,6 +113,26 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
         {dates.length === 0 && <p className="text-sm text-ink-3">No upcoming CaterTrax orders synced yet.</p>}
       </div>
 
+      {/* The phone-call flow: what windows can we offer? */}
+      <Card className="card-pad mb-4">
+        <SectionHeader
+          title={`Can we take a delivery on ${weekdayDate(dateISO)}?`}
+          subtitle="Checks driver shifts, existing drops, unload time and drive time — every verdict says why"
+          right={
+            <Explain
+              title="How windows are computed"
+              steps={[
+                { label: "Who's free", detail: "Each scheduled driver's existing drops are laid out in time order. A new drop fits if the driver has room to unload (~12 min) and drive from the previous stop and still make the next one." },
+                { label: "Drive time", detail: "Straight-line distance between buildings at city speed, +4 min to park. Same building = drops stack. Unknown address = flat 30-min spacing." },
+                { label: "Crowded windows", detail: "Unassigned drops count too: a window where drops would outnumber drivers on shift is never offered." },
+              ]}
+              note="Same math as the board's conflict flags — one source of truth."
+            />
+          }
+        />
+        <SlotFinder date={dateISO} companies={customers.map((c) => c.company)} />
+      </Card>
+
       {/* Conflicts — what a scheduler would actually act on */}
       {day.conflicts.length > 0 && (
         <Card className="card-pad mb-4">
@@ -96,7 +156,8 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
         </Card>
       )}
 
-      <Card className="card-pad">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+      <Card className="card-pad xl:col-span-3">
         <SectionHeader
           title={
             <span className="flex items-center gap-2">
@@ -120,7 +181,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
 
         {/* Driver lanes */}
         {day.lanes.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3">
             {day.lanes.map((lane, i) => (
               <div key={lane.key} className="rounded-xl border border-line bg-canvas-700 p-3">
                 <div className="mb-1 flex items-center justify-between gap-2">
@@ -135,7 +196,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
                 </div>
                 {lane.stops.length ? (
                   <div className="divide-y divide-line">
-                    {lane.stops.map((s) => <StopRow key={s.orderId} s={s} tone={driverColor(i)} />)}
+                    {lane.stops.map((s) => <StopRow key={s.orderId} s={s} tone={driverColor(i)} date={day.date} drivers={drivers} />)}
                   </div>
                 ) : (
                   <p className="py-2 text-[12px] text-ink-3">No stops assigned yet.</p>
@@ -163,7 +224,7 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
           </div>
           {day.unassigned.length ? (
             <div className="divide-y divide-line">
-              {day.unassigned.map((s) => <StopRow key={s.orderId} s={s} />)}
+              {day.unassigned.map((s) => <StopRow key={s.orderId} s={s} date={day.date} drivers={drivers} />)}
             </div>
           ) : (
             <p className="py-2 text-[12px] text-ink-3">{day.totals.drops ? "Every drop is assigned." : "No drops on this day."}</p>
@@ -178,6 +239,29 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
             : ""}
         </p>
       </Card>
+
+      {/* Map — pins colored by driver, gray = unassigned, dashed lines = run order */}
+      <Card className="card-pad xl:col-span-2">
+        <SectionHeader
+          title="Map"
+          subtitle="Pins colored by driver (gray = unassigned) · dashed line = run order from the depot"
+        />
+        <MapPanel depot={day.depot} stops={mapStops} lanes={mapLanes} />
+        {day.lanes.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            {day.lanes.map((l, i) => (
+              <span key={l.key} className="flex items-center gap-1.5 text-[11px] text-ink-2">
+                <span className="h-2 w-2 rounded-full" style={{ background: driverColor(i) }} />
+                {l.name}
+              </span>
+            ))}
+            <span className="flex items-center gap-1.5 text-[11px] text-ink-2">
+              <span className="h-2 w-2 rounded-full bg-ink-3" /> unassigned
+            </span>
+          </div>
+        )}
+      </Card>
+      </div>
     </main>
   );
 }
