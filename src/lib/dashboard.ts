@@ -1548,3 +1548,71 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
 }
 
 const money0 = (v: number) => `$${Math.round(Math.abs(v)).toLocaleString("en-US")}`;
+
+// ---------------------------------------------------------------------------
+// Bookings outlook — REAL forward orders (CaterTrax daily sync + Caterease
+// imports). These are commitments, not projections: the one forward-looking
+// dataset that needs no confidence badge.
+// ---------------------------------------------------------------------------
+export interface BookingsOutlook {
+  window: { from: string; to: string } | null;
+  totals: { bookings: number; revenue: number; guests: number; days: number };
+  next7: { bookings: number; revenue: number };
+  days: Array<{
+    date: string;
+    revenue: number;
+    guests: number;
+    count: number;
+    events: Array<{ name: string | null; status: string | null; guests: number | null; revenue: number | null; source: SourceSystem }>;
+  }>;
+  bySource: Array<{ source: SourceSystem; count: number; revenue: number }>;
+  lastSync: string | null;
+}
+
+export async function getBookingsOutlook(): Promise<BookingsOutlook> {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const [rows, lastRun] = await Promise.all([
+    prisma.eventBooking.findMany({
+      where: { eventDate: { gte: new Date(`${todayIso}T00:00:00Z`) } },
+      orderBy: [{ eventDate: "asc" }, { revenue: "desc" }],
+    }),
+    prisma.syncRun.findFirst({
+      where: { source: "CATERTRAX", status: "SUCCESS", message: { contains: "bookings" } },
+      orderBy: { startedAt: "desc" },
+    }),
+  ]);
+
+  const byDay = new Map<string, BookingsOutlook["days"][number]>();
+  const bySrc = new Map<SourceSystem, { count: number; revenue: number }>();
+  let revenue = 0, guests = 0;
+  for (const b of rows) {
+    const d = iso(b.eventDate);
+    const rev = n(b.revenue) ?? 0;
+    revenue += rev;
+    guests += b.guests ?? 0;
+    const day = byDay.get(d) ?? { date: d, revenue: 0, guests: 0, count: 0, events: [] };
+    day.revenue += rev;
+    day.guests += b.guests ?? 0;
+    day.count += 1;
+    day.events.push({ name: b.name, status: b.status, guests: b.guests ?? null, revenue: n(b.revenue), source: b.source });
+    byDay.set(d, day);
+    const s = bySrc.get(b.source) ?? { count: 0, revenue: 0 };
+    s.count += 1; s.revenue += rev;
+    bySrc.set(b.source, s);
+  }
+  const days = [...byDay.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const week = addDays(todayIso, 7);
+  const next7 = days.filter((d) => d.date <= week).reduce(
+    (acc, d) => ({ bookings: acc.bookings + d.count, revenue: acc.revenue + d.revenue }),
+    { bookings: 0, revenue: 0 }
+  );
+
+  return {
+    window: days.length ? { from: days[0].date, to: days[days.length - 1].date } : null,
+    totals: { bookings: rows.length, revenue, guests, days: days.length },
+    next7,
+    days,
+    bySource: [...bySrc.entries()].map(([source, v]) => ({ source, ...v })).sort((a, b) => b.revenue - a.revenue),
+    lastSync: lastRun ? lastRun.startedAt.toISOString() : null,
+  };
+}
