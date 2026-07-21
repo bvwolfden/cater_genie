@@ -15,7 +15,14 @@ export const dynamic = "force-dynamic";
  * feasibility code the board's conflict flags use.
  */
 export async function POST(req: NextRequest) {
-  const body = (await req.json().catch(() => null)) as { date?: string; company?: string; address?: string; time?: string } | null;
+  const body = (await req.json().catch(() => null)) as {
+    date?: string;
+    company?: string;
+    address?: string;
+    time?: string;
+    /** What-if drivers from the roster — modeled for this check only, never written to the schedule. */
+    extraDrivers?: Array<{ key: string; name: string; start?: string; end?: string }>;
+  } | null;
   if (!body?.date || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
     return NextResponse.json({ ok: false, error: "date (YYYY-MM-DD) required" }, { status: 400 });
   }
@@ -47,7 +54,20 @@ export async function POST(req: NextRequest) {
   }
 
   const day = await getDeliveryDay(body.date);
+  const lanes = day.lanes as DriverLaneModel[];
+  const modeledKeys: string[] = [];
+  for (const d of (body.extraDrivers ?? []).slice(0, 4)) {
+    if (!d?.key || !d.name || lanes.some((l) => l.key === d.key)) continue;
+    lanes.push({
+      key: d.key,
+      name: d.name,
+      startMin: timeToMinutes(d.start ?? null) ?? timeToMinutes("10:00 am"),
+      endMin: timeToMinutes(d.end ?? null) ?? timeToMinutes("5:00 pm"),
+      stops: [],
+    });
+    modeledKeys.push(d.key);
+  }
   const timeMin = timeToMinutes(body.time ?? null);
-  const result = suggestSlots(day.lanes as DriverLaneModel[], day.unassigned, { timeMin, latLng, building });
-  return NextResponse.json({ ok: true, date: body.date, locationNote, timeMin, ...result });
+  const result = suggestSlots(lanes, day.unassigned, { timeMin, latLng, building });
+  return NextResponse.json({ ok: true, date: body.date, locationNote, timeMin, modeledKeys, ...result });
 }

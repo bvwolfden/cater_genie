@@ -25,7 +25,30 @@ export interface DeliveryStopView extends RouteStop {
   status: string | null;
   driverKey: string | null;
   geocoded: boolean;
+  penciled: boolean;
 }
+
+/** Booking filter for the board: real CaterTrax orders + SlotFinder pencils. */
+const BOARD_SOURCES = { OR: [{ source: "CATERTRAX" as const }, { source: "MANUAL" as const, orderId: { startsWith: "pencil-" } }] };
+
+/**
+ * A pencil is superseded once the real CaterTrax order it stood in for syncs
+ * in — hide it rather than show the drop twice. Match = same company, same
+ * day, delivery time within 90 min (or either time unknown), so a company's
+ * genuine second drop of the day at a different time keeps its pencil.
+ */
+const PENCIL_MATCH_MIN = 90;
+const withoutSupersededPencils = <T extends { company: string | null; timeMin: number | null; penciled: boolean }>(rows: T[]): T[] => {
+  const real = rows.filter((r) => !r.penciled && r.company);
+  return rows.filter((r) => {
+    if (!r.penciled || !r.company) return true;
+    return !real.some(
+      (x) =>
+        x.company!.toLowerCase() === r.company!.toLowerCase() &&
+        (r.timeMin == null || x.timeMin == null || Math.abs(x.timeMin - r.timeMin) <= PENCIL_MATCH_MIN)
+    );
+  });
+};
 
 export interface DeliveryLane {
   key: string;
@@ -52,7 +75,7 @@ export const driverKeyOf = (employeeId: string | null, first: string | null, las
 export async function getDeliveryDay(dateISO: string): Promise<DeliveryDay> {
   const date = new Date(`${dateISO}T00:00:00Z`);
   const [bookings, stops, shifts] = await Promise.all([
-    prisma.eventBooking.findMany({ where: { eventDate: date, source: "CATERTRAX" } }),
+    prisma.eventBooking.findMany({ where: { eventDate: date, ...BOARD_SOURCES } }),
     prisma.deliveryStop.findMany({ where: { date } }),
     prisma.scheduledShift.findMany({ where: { date, department: "Delivery" }, orderBy: { startTime: "asc" } }),
   ]);
@@ -84,9 +107,11 @@ export async function getDeliveryDay(dateISO: string): Promise<DeliveryDay> {
       status: b.status,
       driverKey: st?.driverKey ?? null,
       geocoded: latLng != null,
+      penciled: b.source === "MANUAL",
     });
   }
-  views.sort((a, b) => (a.timeMin ?? 9999) - (b.timeMin ?? 9999));
+  const boardViews = withoutSupersededPencils(views);
+  boardViews.sort((a, b) => (a.timeMin ?? 9999) - (b.timeMin ?? 9999));
 
   // Driver lanes from the WIW schedule. One lane per person; if someone has
   // split shifts, use the earliest start and latest end (simple + transparent).
@@ -118,7 +143,7 @@ export async function getDeliveryDay(dateISO: string): Promise<DeliveryDay> {
   const lanes = [...laneMap.values()].sort((a, b) => (a.startMin ?? 9999) - (b.startMin ?? 9999));
 
   const unassigned: DeliveryStopView[] = [];
-  for (const v of views) {
+  for (const v of boardViews) {
     const lane = v.driverKey ? laneMap.get(v.driverKey) : undefined;
     if (lane) lane.stops.push(v);
     else unassigned.push(v);
@@ -132,11 +157,11 @@ export async function getDeliveryDay(dateISO: string): Promise<DeliveryDay> {
     conflicts,
     depot: DEPOT,
     totals: {
-      drops: views.length,
-      guests: views.reduce((s, v) => s + (v.guests ?? 0), 0),
-      revenue: views.reduce((s, v) => s + (v.revenue ?? 0), 0),
+      drops: boardViews.length,
+      guests: boardViews.reduce((s, v) => s + (v.guests ?? 0), 0),
+      revenue: boardViews.reduce((s, v) => s + (v.revenue ?? 0), 0),
       drivers: lanes.length,
-      geocoded: views.filter((v) => v.geocoded).length,
+      geocoded: boardViews.filter((v) => v.geocoded).length,
     },
   };
 }
@@ -146,16 +171,21 @@ export async function getDeliveryDates(daysAhead = 14): Promise<Array<{ date: st
   const today = new Date(`${iso(new Date())}T00:00:00Z`);
   const to = new Date(today.getTime() + daysAhead * 86_400_000);
   const [bookings, shifts] = await Promise.all([
-    prisma.eventBooking.findMany({ where: { eventDate: { gte: today, lte: to }, source: "CATERTRAX" } }),
+    prisma.eventBooking.findMany({ where: { eventDate: { gte: today, lte: to }, ...BOARD_SOURCES } }),
     prisma.scheduledShift.findMany({ where: { date: { gte: today, lte: to }, department: "Delivery" } }),
   ]);
-  const days = new Map<string, { drops: number; drivers: Set<string> }>();
+  // Same supersede rule as the board so the strip's counts match it.
+  const byDay = new Map<string, Array<{ company: string | null; timeMin: number | null; penciled: boolean }>>();
   for (const b of bookings) {
     if ((b.status ?? "").includes("cancel")) continue;
     const d = iso(b.eventDate);
-    const e = days.get(d) ?? { drops: 0, drivers: new Set<string>() };
-    e.drops++;
-    days.set(d, e);
+    const list = byDay.get(d) ?? [];
+    list.push({ company: b.company, timeMin: timeToMinutes(b.eventTime), penciled: b.source === "MANUAL" });
+    byDay.set(d, list);
+  }
+  const days = new Map<string, { drops: number; drivers: Set<string> }>();
+  for (const [d, list] of byDay) {
+    days.set(d, { drops: withoutSupersededPencils(list).length, drivers: new Set<string>() });
   }
   for (const s of shifts) {
     const d = iso(s.date);
@@ -171,6 +201,32 @@ export async function getDeliveryDates(daysAhead = 14): Promise<Array<{ date: st
     out.push({ date: d, drops: e.drops, drivers: e.drivers.size, conflicts });
   }
   return out;
+}
+
+/**
+ * Full driver roster from schedule history (anyone who has ever held a
+ * Delivery shift), with their most recent shift as the default window — for
+ * what-if modeling: "what if we also put X on that day?"
+ */
+export async function getDriverRoster(): Promise<
+  Array<{ key: string; name: string; defaultStart: string; defaultEnd: string }>
+> {
+  const shifts = await prisma.scheduledShift.findMany({
+    where: { department: "Delivery" },
+    orderBy: { date: "desc" },
+  });
+  const seen = new Map<string, { key: string; name: string; defaultStart: string; defaultEnd: string }>();
+  for (const s of shifts) {
+    const key = driverKeyOf(s.employeeId, s.firstName, s.lastName);
+    if (seen.has(key)) continue;
+    seen.set(key, {
+      key,
+      name: [s.firstName, s.lastName].filter(Boolean).join(" ") || "Driver",
+      defaultStart: s.startTime ?? "10:00 am",
+      defaultEnd: s.endTime ?? "5:00 pm",
+    });
+  }
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Known customers for the SlotFinder autocomplete: company → last-seen location. */

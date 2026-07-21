@@ -1,47 +1,78 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
-import { PhoneCall, Search, CircleCheck, CircleX } from "lucide-react";
+import { PhoneCall, Search, CircleCheck, CircleX, UserPlus, X, CalendarPlus } from "lucide-react";
 
 interface Verdict {
+  driverKey: string;
   driverName: string;
   feasible: boolean;
   reason: string;
 }
 interface Suggestion {
   timeLabel: string;
+  driverKey: string;
   driverName: string;
   reason: string;
 }
 interface Result {
   locationNote: string;
   timeMin: number | null;
+  modeledKeys: string[];
   atRequested: Verdict[];
   alternatives: Suggestion[];
   blockers: string[];
+}
+
+export interface RosterDriver {
+  key: string;
+  name: string;
+  defaultStart: string;
+  defaultEnd: string;
 }
 
 /**
  * The phone-call flow: business name + day (+ optional asked-for time) →
  * which windows we can offer, with the reasoning spelled out. Companies come
  * from booking history (server-provided) — free-typing a new name still works,
- * it just falls back to the flat spacing rule.
+ * it just falls back to the flat spacing rule. Roster drivers not on the day's
+ * schedule can be added as WHAT-IF lanes ("what if Alex worked Thursday?") —
+ * modeled in the math only, never written to the schedule.
  */
-export function SlotFinder({ date, companies }: { date: string; companies: string[] }) {
+export function SlotFinder({
+  date,
+  companies,
+  roster,
+  dayDriverKeys,
+}: {
+  date: string;
+  companies: string[];
+  roster: RosterDriver[];
+  dayDriverKeys: string[];
+}) {
   const [company, setCompany] = useState("");
   const [time, setTime] = useState("");
+  const [extra, setExtra] = useState<RosterDriver[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const search = () => {
+  const addable = roster.filter((r) => !dayDriverKeys.includes(r.key) && !extra.some((e) => e.key === r.key));
+
+  const search = (extraNow: RosterDriver[] = extra) => {
     setError(null);
     startTransition(async () => {
       const r = await fetch("/api/delivery/feasibility", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, company: company || undefined, time: time || undefined }),
+        body: JSON.stringify({
+          date,
+          company: company || undefined,
+          time: time || undefined,
+          extraDrivers: extraNow.map((e) => ({ key: e.key, name: e.name, start: e.defaultStart, end: e.defaultEnd })),
+        }),
       }).catch(() => null);
       if (!r?.ok) {
         setError("Couldn't check availability — try again.");
@@ -49,6 +80,19 @@ export function SlotFinder({ date, companies }: { date: string; companies: strin
       }
       setResult((await r.json()) as Result);
     });
+  };
+
+  const addDriver = (key: string) => {
+    const d = roster.find((r) => r.key === key);
+    if (!d) return;
+    const next = [...extra, d];
+    setExtra(next);
+    if (result) search(next); // refresh an existing answer with the new lane
+  };
+  const removeDriver = (key: string) => {
+    const next = extra.filter((e) => e.key !== key);
+    setExtra(next);
+    if (result) search(next);
   };
 
   return (
@@ -79,7 +123,7 @@ export function SlotFinder({ date, companies }: { date: string; companies: strin
           />
         </label>
         <button
-          onClick={search}
+          onClick={() => search()}
           disabled={pending}
           className={cn(
             "flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600",
@@ -89,7 +133,38 @@ export function SlotFinder({ date, companies }: { date: string; companies: strin
           <Search className="h-3.5 w-3.5" />
           {pending ? "Checking…" : "Find windows"}
         </button>
+
+        {/* What-if drivers: model someone from the roster onto this day */}
+        <label className="flex flex-col gap-1">
+          <span className="stat-label flex items-center gap-1"><UserPlus className="h-3 w-3" /> What if we add a driver?</span>
+          <select
+            value=""
+            onChange={(e) => e.target.value && addDriver(e.target.value)}
+            className="rounded-lg border border-line bg-white px-2 py-1.5 text-[12px] text-ink-2 outline-none transition hover:border-brand/40"
+          >
+            <option value="">{addable.length ? "pick from roster…" : "everyone's already on this day"}</option>
+            {addable.map((r) => (
+              <option key={r.key} value={r.key}>
+                {r.name} (usually {r.defaultStart}–{r.defaultEnd})
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
+
+      {extra.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {extra.map((e) => (
+            <span key={e.key} className="pill border border-amber/40 bg-amber/10 px-2 py-1 text-[11px] font-medium text-amber">
+              {e.name} · {e.defaultStart}–{e.defaultEnd} · what-if
+              <button onClick={() => removeDriver(e.key)} className="ml-1 hover:text-ink" title="Remove">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          <span className="text-[11px] text-ink-3">modeled only — nothing is added to the real schedule</span>
+        </div>
+      )}
 
       {error && <p className="mt-2 text-[12px] text-rose">{error}</p>}
 
@@ -124,17 +199,33 @@ export function SlotFinder({ date, companies }: { date: string; companies: strin
             </div>
             {result.alternatives.length ? (
               <div className="flex flex-wrap gap-1.5">
-                {result.alternatives.map((s, i) => (
-                  <span key={i} title={s.reason} className="pill border border-mint/40 bg-mint/10 px-2.5 py-1 text-[12px] font-medium text-mint">
-                    {s.timeLabel} · {s.driverName}
-                  </span>
-                ))}
+                {result.alternatives.map((s, i) => {
+                  const whatIf = result.modeledKeys?.includes(s.driverKey);
+                  return (
+                    <span
+                      key={i}
+                      title={whatIf ? `${s.reason} (only if ${s.driverName} gets a shift that day)` : s.reason}
+                      className={cn(
+                        "pill border px-2.5 py-1 text-[12px] font-medium",
+                        whatIf ? "border-amber/40 bg-amber/10 text-amber" : "border-mint/40 bg-mint/10 text-mint"
+                      )}
+                    >
+                      {s.timeLabel} · {s.driverName}
+                      {whatIf ? " · what-if" : ""}
+                    </span>
+                  );
+                })}
               </div>
             ) : (
-              <p className="text-[13px] text-ink-2">No open windows this day — every driver is committed. Consider another day or adding a driver shift.</p>
+              <p className="text-[13px] text-ink-2">
+                No open windows this day — every driver is committed. Try the &ldquo;what if we add a driver?&rdquo; picker or another day.
+              </p>
             )}
             {result.alternatives.length > 0 && (
-              <p className="mt-1.5 text-[11px] text-ink-3">Hover a window for the why (which drops it fits between).</p>
+              <p className="mt-1.5 text-[11px] text-ink-3">
+                Hover a window for the why (which drops it fits between).
+                {result.modeledKeys?.length ? " Amber windows exist only if the what-if driver actually gets scheduled." : ""}
+              </p>
             )}
           </div>
         </div>

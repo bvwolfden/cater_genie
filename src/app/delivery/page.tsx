@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getDeliveryDay, getDeliveryDates, getKnownCustomers, type DeliveryStopView } from "@/lib/delivery";
+import { getDeliveryDay, getDeliveryDates, getDriverRoster, getKnownCustomers, type DeliveryStopView } from "@/lib/delivery";
 import { SlotFinder } from "@/components/delivery/SlotFinder";
 import { driverColor } from "@/lib/delivery-palette";
 import { SERVICE_MIN, SPACING_MIN } from "@/lib/routing";
@@ -54,7 +54,7 @@ function StopRow({
 
 export default async function DeliveryPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const sp = await searchParams;
-  const [dates, customers] = await Promise.all([getDeliveryDates(14), getKnownCustomers()]);
+  const [dates, customers, roster] = await Promise.all([getDeliveryDates(14), getKnownCustomers(), getDriverRoster()]);
   const fallback = dates.find((d) => d.drops > 0)?.date ?? todayISO();
   const dateISO = sp.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : fallback;
   const day = await getDeliveryDay(dateISO);
@@ -130,7 +130,12 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
             />
           }
         />
-        <SlotFinder date={dateISO} companies={customers.map((c) => c.company)} />
+        <SlotFinder
+          date={dateISO}
+          companies={customers.map((c) => c.company)}
+          roster={roster}
+          dayDriverKeys={day.lanes.map((l) => l.key)}
+        />
       </Card>
 
       {/* Conflicts — what a scheduler would actually act on */}

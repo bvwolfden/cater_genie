@@ -68,17 +68,22 @@ export function deltaPct(curr: number | null, prev: number | null): number | nul
   return (curr - prev) / Math.abs(prev);
 }
 
-/** "11:30 AM" / "9:30 am" / "13:05" → minutes since midnight, else null. */
+/**
+ * "11:30 AM" / "9:30 am" / "13:05" / "11" / "2pm" → minutes since midnight,
+ * else null. Bare hours without am/pm use a business-hours heuristic:
+ * 8–12 reads as morning, 1–7 as afternoon (catering days run ~8am–7pm).
+ */
 export function timeToMinutes(s: string | null | undefined): number | null {
   if (!s) return null;
-  const m = s.trim().match(/^(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?$/i);
+  const m = s.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*([ap])?\.?m?\.?$/i);
   if (!m) return null;
   let h = parseInt(m[1], 10);
-  const min = parseInt(m[2], 10);
+  const min = m[2] != null ? parseInt(m[2], 10) : 0;
   if (min > 59) return null;
   const ap = m[3]?.toLowerCase();
-  if (ap?.startsWith("p") && h !== 12) h += 12;
-  if (ap?.startsWith("a") && h === 12) h = 0;
+  if (ap === "p" && h !== 12) h += 12;
+  else if (ap === "a" && h === 12) h = 0;
+  else if (!ap && h >= 1 && h <= 7) h += 12; // "2" → 2 PM
   if (h > 23) return null;
   return h * 60 + min;
 }
