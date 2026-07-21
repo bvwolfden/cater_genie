@@ -19,7 +19,7 @@ export function Balances({ data }: { data: Dashboard }) {
     <Card className="card-pad">
       <SectionHeader
         title="Account Balances"
-        subtitle="QuickBooks · latest snapshot"
+        subtitle="Manual entry · latest snapshot per account (QuickBooks not yet syncing)"
         right={
           <div className="text-right">
             <div className="stat-label">Net position</div>

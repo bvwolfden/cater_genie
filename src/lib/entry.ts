@@ -24,20 +24,23 @@ async function scoreForecasts(dateISO: string): Promise<number> {
   const metric = await prisma.dailyMetric.findUnique({ where: { date: d } });
   const actualNet = num(metric?.netSales);
   const actualLaborPct = num(metric?.laborPct);
-  if (actualNet != null && actualNet !== 0) {
+  if (actualNet != null) {
+    // Score zero/closed days too (denominator floored at $1): skipping them
+    // leaves those forecasts open forever and hides the model's worst misses.
+    const denom = Math.max(Math.abs(actualNet), 1);
     const dayForecasts = await prisma.forecast.findMany({
       where: { mode: "live", horizon: "next_day", targetDate: d, scoredAt: null },
     });
     for (const fc of dayForecasts) {
       const pred = num(fc.predNetSales);
       const base = num(fc.baselineNetSales);
-      const err = pred == null ? null : (pred - actualNet) / actualNet;
+      const err = pred == null ? null : (pred - actualNet) / denom;
       await prisma.forecast.update({
         where: { id: fc.id },
         data: {
           actualNetSales: actualNet, actualLaborPct,
           errorPct: err, absErrorPct: err == null ? null : Math.abs(err),
-          baselineErrorPct: base == null ? null : (base - actualNet) / actualNet,
+          baselineErrorPct: base == null ? null : (base - actualNet) / denom,
           scoredAt: new Date(),
         },
       });
@@ -57,16 +60,16 @@ async function scoreForecasts(dateISO: string): Promise<number> {
       const days = Array.from({ length: 7 }, (_, i) => addDaysIso(start, i));
       if (!days.every((dd) => byDate.has(dd))) continue; // window not complete yet
       const actualWeek = days.reduce((s, dd) => s + (byDate.get(dd) ?? 0), 0);
-      if (actualWeek === 0) continue;
+      const wDenom = Math.max(Math.abs(actualWeek), 1);
       const pred = num(fc.predNetSales);
       const base = num(fc.baselineNetSales);
-      const err = pred == null ? null : (pred - actualWeek) / actualWeek;
+      const err = pred == null ? null : (pred - actualWeek) / wDenom;
       await prisma.forecast.update({
         where: { id: fc.id },
         data: {
           actualNetSales: actualWeek,
           errorPct: err, absErrorPct: err == null ? null : Math.abs(err),
-          baselineErrorPct: base == null ? null : (base - actualWeek) / actualWeek,
+          baselineErrorPct: base == null ? null : (base - actualWeek) / wDenom,
           scoredAt: new Date(),
         },
       });

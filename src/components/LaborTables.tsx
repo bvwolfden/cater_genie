@@ -38,12 +38,12 @@ export function DepartmentTable({ detail }: { detail: LaborDetail }) {
 }
 
 export function EmployeeTable({ detail }: { detail: LaborDetail }) {
-  const cols = ["Employee", "Department", "Sched", "Actual", "OT", "Rate", "Cost"];
+  const cols = ["Employee", "Department", "Actual", "OT", "Rate", "Cost"];
   return (
     <Card className="card-pad">
       <SectionHeader
         title="By Employee"
-        subtitle={`${detail.byEmployee.length} people${detail.dateRange.start ? ` · ${detail.dateRange.start} → ${detail.dateRange.end}` : ""} · scheduled = stub`}
+        subtitle={`${detail.byEmployee.length} people${detail.dateRange.start ? ` · ${detail.dateRange.start} → ${detail.dateRange.end}` : ""}`}
       />
       {/* Desktop: table */}
       <div className="hidden overflow-x-auto md:block">
@@ -62,7 +62,6 @@ export function EmployeeTable({ detail }: { detail: LaborDetail }) {
               <tr key={e.employeeId ?? e.name} className="border-b border-line/70 last:border-0 hover:bg-canvas-700">
                 <td className="py-2.5 font-medium text-ink">{e.name}</td>
                 <td className="py-2.5 text-ink-2">{e.department ?? "—"}</td>
-                <td className="py-2.5 text-right tabular-nums text-ink-3">{e.scheduledHours.toFixed(0)}</td>
                 <td className="py-2.5 text-right font-medium tabular-nums text-ink">{e.hours.toFixed(1)}</td>
                 <td className="py-2.5 text-right tabular-nums text-ink-2">{e.otHours ? e.otHours.toFixed(1) : "—"}</td>
                 <td className="py-2.5 text-right tabular-nums text-ink-2">{e.avgRate != null ? money(e.avgRate, true) : "—"}</td>
@@ -82,7 +81,6 @@ export function EmployeeTable({ detail }: { detail: LaborDetail }) {
             </div>
             <div className="text-[11px] text-ink-3">{e.department ?? "—"}</div>
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-2">
-              <span>Sched <b className="text-ink">{e.scheduledHours.toFixed(0)}h</b></span>
               <span>Actual <b className="text-ink">{e.hours.toFixed(1)}h</b></span>
               <span>OT <b className="text-ink">{e.otHours ? e.otHours.toFixed(1) : "—"}</b></span>
               <span>Rate <b className="text-ink">{e.avgRate != null ? money(e.avgRate, true) : "—"}</b></span>

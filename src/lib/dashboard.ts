@@ -13,6 +13,9 @@ export interface PeriodComparison {
   label: string;
   currentLabel: string;
   priorLabel: string;
+  /** Rows are per-week AVERAGES: months differ in week count (and in how many
+   *  weeks have labor recorded), so raw totals compare 5 weeks against 4 and
+   *  can read directionally backwards. */
   sales: { current: number | null; prior: number | null; deltaPct: number | null };
   labor: { current: number | null; prior: number | null; deltaPct: number | null };
   laborPct: { current: number | null; prior: number | null };
@@ -31,16 +34,18 @@ export interface PeriodKpis {
   from: string | null;
   to: string | null;
   netSales: number;
-  netSalesPrev: number;
+  netSalesPrev: number | null;
   laborCost: number;
   laborPct: number | null;
   laborPctPrev: number | null;
   hours: number;
-  hoursPrev: number;
+  hoursPrev: number | null;
   food: number;
-  foodPrev: number;
+  foodPrev: number | null;
   cash: number | null;
   cashPrev: number | null;
+  /** How much of the requested window the daily data actually covers. */
+  coverage: { daysWithData: number; daysExpected: number; dataFrom: string | null };
   spark: { net: number[]; laborPct: number[]; hours: number[]; food: number[]; cash: number[] };
 }
 
@@ -223,8 +228,16 @@ function resolvePeriod(
 }
 
 // Monthly aggregation of weekly rollups (2026 calendar months only).
-type MonthAgg = { s26: number; s25: number; l26: number; l25: number; l24: number; weeks: number };
-const emptyMonth = (): MonthAgg => ({ s26: 0, s25: 0, l26: 0, l25: 0, l24: 0, weeks: 0 });
+type MonthAgg = {
+  s26: number; s25: number; l26: number; l25: number; l24: number;
+  weeks: number; // 2026 weeks with revenue
+  weeks25: number; // weeks with prior-year revenue
+  laborWeeks: number; // 2026 weeks with labor actually recorded
+  laborWeeks25: number;
+  s26L: number; // 2026 revenue within labor-covered weeks (labor % denominator)
+  s25L: number;
+};
+const emptyMonth = (): MonthAgg => ({ s26: 0, s25: 0, l26: 0, l25: 0, l24: 0, weeks: 0, weeks25: 0, laborWeeks: 0, laborWeeks25: 0, s26L: 0, s25L: 0 });
 
 function monthlyBuckets(
   rows: { weekStart: Date; totalRevenue: unknown; revenuePrev1: unknown; laborCost: unknown; laborPrev1: unknown; laborPrev2: unknown }[]
@@ -235,15 +248,52 @@ function monthlyBuckets(
     if (!ym.startsWith("2026")) continue;
     const a = m.get(ym) ?? emptyMonth();
     const rev = n(r.totalRevenue) ?? 0;
+    const rev25 = n(r.revenuePrev1) ?? 0;
+    const lab = n(r.laborCost) ?? 0;
+    const lab25 = n(r.laborPrev1) ?? 0;
     a.s26 += rev;
-    a.s25 += n(r.revenuePrev1) ?? 0;
-    a.l26 += n(r.laborCost) ?? 0;
-    a.l25 += n(r.laborPrev1) ?? 0;
+    a.s25 += rev25;
     a.l24 += n(r.laborPrev2) ?? 0;
     if (rev > 0) a.weeks += 1;
+    if (rev25 > 0) a.weeks25 += 1;
+    // laborCost 0 on a revenue week means "not recorded", not free labor —
+    // keep such weeks out of the sum, the week count, and the % denominator.
+    if (lab > 0) { a.l26 += lab; a.laborWeeks += 1; a.s26L += rev; }
+    if (lab25 > 0) { a.l25 += lab25; a.laborWeeks25 += 1; a.s25L += rev25; }
     m.set(ym, a);
   }
   return m;
+}
+
+/** MoM/YoY comparison panels from monthly buckets. Values are per-week
+ *  averages and labor % is computed only over labor-covered weeks, so a
+ *  5-week month vs a 4-week month (or a month with 3 of 4 labor weeks
+ *  recorded) can't read as a fake 25–50% swing. */
+function buildComparisons(monthly: Map<string, MonthAgg>): { mom: PeriodComparison; yoy: PeriodComparison } {
+  const selYm = latestCompleteMonth(monthly);
+  const prevKey = prevYm(selYm);
+  const c = monthly.get(selYm) ?? emptyMonth();
+  const p = monthly.get(prevKey) ?? emptyMonth();
+  const perWk = (v: number, w: number) => (w > 0 ? v / w : null);
+  const wkTag = (w: number) => (w ? ` (${w} wk${w === 1 ? "" : "s"})` : "");
+  const priorYm = `${Number(selYm.slice(0, 4)) - 1}-${selYm.slice(5, 7)}`;
+  const mom: PeriodComparison = {
+    label: "Month over Month",
+    currentLabel: `${ymLabel(selYm)}${wkTag(c.weeks)}`,
+    priorLabel: `${ymLabel(prevKey)}${wkTag(p.weeks)}`,
+    sales: { current: perWk(c.s26, c.weeks), prior: perWk(p.s26, p.weeks), deltaPct: pctChange(perWk(c.s26, c.weeks), perWk(p.s26, p.weeks)) },
+    labor: { current: perWk(c.l26, c.laborWeeks), prior: perWk(p.l26, p.laborWeeks), deltaPct: pctChange(perWk(c.l26, c.laborWeeks), perWk(p.l26, p.laborWeeks)) },
+    laborPct: { current: c.s26L ? c.l26 / c.s26L : null, prior: p.s26L ? p.l26 / p.s26L : null },
+  };
+  const yoy: PeriodComparison = {
+    label: "Year over Year",
+    currentLabel: `${ymLabel(selYm)}${wkTag(c.weeks)}`,
+    priorLabel: `${ymLabel(priorYm)}${wkTag(c.weeks25)}`,
+    sales: { current: perWk(c.s26, c.weeks), prior: perWk(c.s25, c.weeks25), deltaPct: pctChange(perWk(c.s26, c.weeks), perWk(c.s25, c.weeks25)) },
+    labor: { current: perWk(c.l26, c.laborWeeks), prior: perWk(c.l25, c.laborWeeks25), deltaPct: pctChange(perWk(c.l26, c.laborWeeks), perWk(c.l25, c.laborWeeks25)) },
+    laborPct: { current: c.s26L ? c.l26 / c.s26L : null, prior: c.s25L ? c.l25 / c.s25L : null },
+  };
+  return { mom, yoy };
 }
 
 /** Latest month with ≥4 weeks of data; falls back to latest month with any. */
@@ -266,17 +316,24 @@ export async function getDashboard(opts?: {
   )
     ? (opts?.period as PeriodKey)
     : "week";
+  // "Latest timesheet week" cards must aggregate exactly one week — without a
+  // date filter they silently sum every imported week (5+ already).
+  const laborEdge = await prisma.laborEntry.aggregate({ _max: { date: true } });
+  const laborWeekWhere = laborEdge._max.date
+    ? { date: { gte: new Date(laborEdge._max.date.getTime() - 6 * 86400000) } }
+    : {};
   const [metrics, balanceRows, deptGroups, channelRows, rollupRows, deptEmp] =
     await Promise.all([
       prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
       prisma.accountBalance.findMany({ orderBy: { date: "asc" } }),
       prisma.laborEntry.groupBy({
         by: ["department"],
+        where: laborWeekWhere,
         _sum: { regularHours: true, otHours: true, paidTotal: true },
       }),
       prisma.weeklyChannelRevenue.findMany({ orderBy: { weekStart: "asc" } }),
       prisma.weeklyRollup.findMany({ orderBy: { weekStart: "asc" } }),
-      prisma.laborEntry.groupBy({ by: ["department", "employeeId"] }),
+      prisma.laborEntry.groupBy({ by: ["department", "employeeId"], where: laborWeekWhere }),
     ]);
   const deptHeadcount = new Map<string, number>();
   for (const r of deptEmp) if (r.department) deptHeadcount.set(r.department, (deptHeadcount.get(r.department) ?? 0) + 1);
@@ -408,8 +465,13 @@ export async function getDashboard(opts?: {
     .sort((a, b) => (a.weekStart < b.weekStart ? -1 : 1));
   const wkActuals = wkAll.filter((w) => (w.total ?? 0) > 0);
   const lastActualWk = wkActuals.length ? wkActuals[wkActuals.length - 1].weekStart : null;
+  // YoY pace from the trailing 8 matched weeks — a full-year blended pace
+  // (currently ~1.21×) badly overshoots when the recent regime shifts
+  // (July 2026 is running well under July 2025).
+  const wkMatched = wkActuals.filter((w) => (w.priorYear ?? 0) > 0);
+  const wkPaceSet = wkMatched.length >= 3 ? wkMatched.slice(-8) : wkMatched;
   let wkPaceNum = 0, wkPaceDen = 0;
-  for (const w of wkActuals) if ((w.priorYear ?? 0) > 0) { wkPaceNum += w.total!; wkPaceDen += w.priorYear!; }
+  for (const w of wkPaceSet) { wkPaceNum += w.total!; wkPaceDen += w.priorYear!; }
   const wkPace = wkPaceDen > 0 ? wkPaceNum / wkPaceDen : 1;
   const wkRunRate = wkActuals.length
     ? wkActuals.slice(-4).reduce((s, w) => s + w.total!, 0) / Math.min(4, wkActuals.length)
@@ -500,19 +562,34 @@ export async function getDashboard(opts?: {
     return v;
   };
   let periodKpis: PeriodKpis;
+  const dataFrom = withSales[0]?.date ?? null;
   if (per) {
-    const { from: tFrom, to: tTo, priorFrom: lFrom, priorTo: lTo } = per;
+    // Clamp the window to the daily-data edge: `sumRange` reads a missing day
+    // as $0, so an unclamped "YTD" quietly drops every day before the first
+    // import and shows it as a revenue collapse.
+    const tFrom = dataFrom && per.from < dataFrom ? dataFrom : per.from;
+    const tTo = per.to;
+    const clamped = tFrom !== per.from;
+    const { priorFrom: lFrom, priorTo: lTo } = per;
+    // The prior window only yields a fair comparison if daily data fully
+    // covers it — a half-covered window deflates the baseline.
+    const priorCovered = dataFrom != null && lFrom >= dataFrom;
     const net = sumRange(tFrom, tTo, (d) => d.netSales);
-    const netP = sumRange(lFrom, lTo, (d) => d.netSales);
+    const netP = priorCovered ? sumRange(lFrom, lTo, (d) => d.netSales) : null;
     const lab = sumRange(tFrom, tTo, (d) => d.laborCost);
-    const labP = sumRange(lFrom, lTo, (d) => d.laborCost);
-    // Sparklines: 8 trailing windows of the period's length ending at `to`.
+    const labP = priorCovered ? sumRange(lFrom, lTo, (d) => d.laborCost) : null;
+    const daysExpected = daysBetween(tFrom, tTo) + 1;
+    const daysWithData = series.filter((d) => d.date >= tFrom && d.date <= tTo && d.netSales != null).length;
+    // Sparklines: trailing windows of the period's length ending at `to`,
+    // skipping windows that reach past the data edge (no fabricated $0 dips).
     const winLen = daysBetween(tFrom, tTo) + 1;
     const sparkOf = (pick: (d: DayPoint) => number | null) => {
       const out: number[] = [];
       for (let w = 7; w >= 0; w--) {
         const to = addDays(tTo, -winLen * w);
-        out.push(sumRange(addDays(to, -(winLen - 1)), to, pick));
+        const from = addDays(to, -(winLen - 1));
+        if (dataFrom && from < dataFrom) continue;
+        out.push(sumRange(from, to, pick));
       }
       return out;
     };
@@ -520,31 +597,35 @@ export async function getDashboard(opts?: {
     const cashSpark: number[] = [];
     for (let w = 7; w >= 0; w--) {
       const to = addDays(tTo, -winLen * w);
-      const s = sumRange(addDays(to, -(winLen - 1)), to, (d) => d.netSales);
-      const l = sumRange(addDays(to, -(winLen - 1)), to, (d) => d.laborCost);
-      laborPctSpark.push(s ? l / s : 0);
-      cashSpark.push(cashAsOf(to) ?? 0);
+      const from = addDays(to, -(winLen - 1));
+      if (dataFrom && from < dataFrom) continue;
+      const s = sumRange(from, to, (d) => d.netSales);
+      const l = sumRange(from, to, (d) => d.laborCost);
+      if (s) laborPctSpark.push(l / s);
+      const cv = cashAsOf(to);
+      if (cv != null) cashSpark.push(cv);
     }
     periodKpis = {
       period: periodKey,
-      label: per.label,
-      priorLabel: per.priorLabel,
+      label: clamped && dataFrom ? `${per.label} · data since ${fmtShort(dataFrom)}` : per.label,
+      priorLabel: priorCovered ? per.priorLabel : `${per.priorLabel} — no daily data`,
       sparkUnit: per.sparkUnit,
       from: tFrom, to: tTo,
       netSales: net, netSalesPrev: netP,
       laborCost: lab,
       laborPct: net ? lab / net : null,
-      laborPctPrev: netP ? labP / netP : null,
+      laborPctPrev: netP ? labP! / netP : null,
       hours: sumRange(tFrom, tTo, (d) => d.laborHours),
-      hoursPrev: sumRange(lFrom, lTo, (d) => d.laborHours),
+      hoursPrev: priorCovered ? sumRange(lFrom, lTo, (d) => d.laborHours) : null,
       food: sumRange(tFrom, tTo, (d) => d.foodPurchases),
-      foodPrev: sumRange(lFrom, lTo, (d) => d.foodPurchases),
+      foodPrev: priorCovered ? sumRange(lFrom, lTo, (d) => d.foodPurchases) : null,
       cash: cashAsOf(tTo),
       cashPrev: cashAsOf(lTo),
+      coverage: { daysWithData, daysExpected, dataFrom },
       spark: { net: sparkOf((d) => d.netSales), laborPct: laborPctSpark, hours: sparkOf((d) => d.laborHours), food: sparkOf((d) => d.foodPurchases), cash: cashSpark },
     };
   } else {
-    periodKpis = { period: periodKey, label: "", priorLabel: "", sparkUnit: "week", from: null, to: null, netSales: 0, netSalesPrev: 0, laborCost: 0, laborPct: null, laborPctPrev: null, hours: 0, hoursPrev: 0, food: 0, foodPrev: 0, cash: null, cashPrev: null, spark: { net: [], laborPct: [], hours: [], food: [], cash: [] } };
+    periodKpis = { period: periodKey, label: "", priorLabel: "", sparkUnit: "week", from: null, to: null, netSales: 0, netSalesPrev: null, laborCost: 0, laborPct: null, laborPctPrev: null, hours: 0, hoursPrev: null, food: 0, foodPrev: null, cash: null, cashPrev: null, coverage: { daysWithData: 0, daysExpected: 0, dataFrom: null }, spark: { net: [], laborPct: [], hours: [], food: [], cash: [] } };
   }
 
   // MTD card comparison: same day-span of the prior month (not last month's
@@ -553,8 +634,14 @@ export async function getDashboard(opts?: {
   let mtdPriorLabel: string | null = null;
   if (selectedDate) {
     const mp = resolvePeriod("month", selectedDate);
-    mtdNetSalesPrevSpan = sumRange(mp.priorFrom, mp.priorTo, (d) => d.netSales);
-    mtdPriorLabel = `${mp.priorLabel} (same days)`;
+    // Only compare when daily data fully covers the prior-month span —
+    // a half-covered span deflates the baseline and fakes growth.
+    if (dataFrom && mp.priorFrom >= dataFrom) {
+      mtdNetSalesPrevSpan = sumRange(mp.priorFrom, mp.priorTo, (d) => d.netSales);
+      mtdPriorLabel = `${mp.priorLabel} (same days)`;
+    } else {
+      mtdPriorLabel = `${mp.priorLabel} — no daily data`;
+    }
   }
 
   // --- Forward Daily Ledger: project next 10 days from weekday seasonality --
@@ -579,9 +666,13 @@ export async function getDashboard(opts?: {
       if (d.laborCost != null) push(byDowLabor, dow, d.laborCost);
       if (d.laborHours != null) push(byDowHours, dow, d.laborHours);
     }
-    const avg = (m: Map<number, number[]>, k: number): number | null => {
+    // Median, not mean: a holiday week inside the 28-day lookback (July 4)
+    // drags every weekday mean for the next 10 projected days.
+    const med = (m: Map<number, number[]>, k: number): number | null => {
       const arr = m.get(k);
-      return arr?.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+      if (!arr?.length) return null;
+      const s = [...arr].sort((a, b) => a - b);
+      return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
     };
     // Blended ratio only as a fallback for weekdays with no labor history.
     let lp = 0, ls = 0;
@@ -590,11 +681,11 @@ export async function getDashboard(opts?: {
     for (let i = 1; i <= 10; i++) {
       const dt = addDays(latestDate, i);
       const dow = new Date(`${dt}T00:00:00Z`).getUTCDay();
-      const nsAvg = avg(byDow, dow);
+      const nsAvg = med(byDow, dow);
       const ns = nsAvg != null ? Math.round(nsAvg) : null;
-      const lcAvg = avg(byDowLabor, dow);
+      const lcAvg = med(byDowLabor, dow);
       const lc = lcAvg != null ? Math.round(lcAvg) : ns != null ? Math.round(ns * dailyLaborPct) : null;
-      const lhAvg = avg(byDowHours, dow);
+      const lhAvg = med(byDowHours, dow);
       forwardDays.push({
         date: dt,
         netSales: ns,
@@ -608,30 +699,8 @@ export async function getDashboard(opts?: {
   }
 
   // --- MoM / YoY comparisons (from weekly rollups: has both years) ---------
-  const monthly = monthlyBuckets(rollupRows);
-  // Anchor MoM/YoY to the latest COMPLETE month (≥4 weeks of data) so a
-  // partial current month doesn't distort the comparison.
-  const selYm = latestCompleteMonth(monthly);
-  const prevKey = prevYm(selYm);
-  const curMonth = monthly.get(selYm) ?? emptyMonth();
-  const prevMonth = monthly.get(prevKey) ?? emptyMonth();
-
-  const mom: PeriodComparison = {
-    label: "Month over Month",
-    currentLabel: ymLabel(selYm),
-    priorLabel: ymLabel(prevKey),
-    sales: { current: curMonth.s26 || null, prior: prevMonth.s26 || null, deltaPct: pctChange(curMonth.s26 || null, prevMonth.s26 || null) },
-    labor: { current: curMonth.l26 || null, prior: prevMonth.l26 || null, deltaPct: pctChange(curMonth.l26 || null, prevMonth.l26 || null) },
-    laborPct: { current: curMonth.s26 ? curMonth.l26 / curMonth.s26 : null, prior: prevMonth.s26 ? prevMonth.l26 / prevMonth.s26 : null },
-  };
-  const yoy: PeriodComparison = {
-    label: "Year over Year",
-    currentLabel: ymLabel(selYm),
-    priorLabel: `${Number(selYm.slice(0, 4)) - 1}`,
-    sales: { current: curMonth.s26 || null, prior: curMonth.s25 || null, deltaPct: pctChange(curMonth.s26 || null, curMonth.s25 || null) },
-    labor: { current: curMonth.l26 || null, prior: curMonth.l25 || null, deltaPct: pctChange(curMonth.l26 || null, curMonth.l25 || null) },
-    laborPct: { current: curMonth.s26 ? curMonth.l26 / curMonth.s26 : null, prior: curMonth.s25 ? curMonth.l25 / curMonth.s25 : null },
-  };
+  // Anchored to the latest COMPLETE month; per-week averages via buildComparisons.
+  const comparisons = buildComparisons(monthlyBuckets(rollupRows));
 
   return {
     generatedAt: new Date().toISOString(),
@@ -641,7 +710,7 @@ export async function getDashboard(opts?: {
     series,
     range,
     rangeSeries,
-    comparisons: { mom, yoy },
+    comparisons,
     kpis: {
       netSales: latest?.netSales ?? null,
       netSalesPrev: prev?.netSales ?? null,
@@ -691,7 +760,16 @@ export interface PulsePoint {
 
 export interface Pulse {
   points: PulsePoint[]; // cumulative across the year
-  assumptions: { yoyGrowthPct: number; laborPct: number; foodPct: number };
+  assumptions: {
+    yoyGrowthPct: number;
+    laborPct: number;
+    foodPct: number;
+    /** Weeks inside the "actual" region whose labor/food had to be imputed —
+     *  the solid lines are only as real as these counts are low. */
+    imputedLaborWeeks: number;
+    imputedFoodWeeks: number;
+    actualWeeks: number;
+  };
   stubbedCosts: CostComponent[];
   ytd: { revenue: number; cost: number; profit: number; grossProfit: number; marginPct: number | null; grossMarginPct: number | null; throughWeek: string | null };
   projectedYearEnd: { revenue: number; cost: number; profit: number; grossProfit: number; marginPct: number | null; grossMarginPct: number | null };
@@ -731,16 +809,37 @@ export async function getPulse(): Promise<Pulse> {
   }
   const foodPct = foodRev ? Math.min(0.6, foodSum / foodRev) : 0.3;
 
-  // YoY pace: 2026 vs 2025 over the SAME matched weeks (drives the seasonal scale).
+  // Actual food per week where the daily tracker covered ≥5 days of the week;
+  // modeled % otherwise. (Weeks start Monday, matching the rollups.)
+  const foodByWeek = new Map<string, { sum: number; days: number }>();
+  for (const m of metrics) {
+    const f = n(m.foodPurchases);
+    if (f == null) continue;
+    const d = iso(m.date);
+    const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
+    const wkStart = addDays(d, -((dow + 6) % 7));
+    const e = foodByWeek.get(wkStart) ?? { sum: 0, days: 0 };
+    e.sum += f; e.days += 1;
+    foodByWeek.set(wkStart, e);
+  }
+  const actualFood = (week: string): number | null => {
+    const fw = foodByWeek.get(week);
+    return fw && fw.days >= 5 ? fw.sum : null;
+  };
+
+  // YoY pace over the trailing 8 matched weeks — a full-year blended pace
+  // overshoots the projection when the recent trend breaks from spring.
+  const matchedWks = actualWeeks.filter((w) => w.rev25 > 0);
+  const paceSet = matchedWks.length >= 3 ? matchedWks.slice(-8) : matchedWks;
   let yoyA = 0, yoyB = 0;
-  for (const w of actualWeeks) if (w.rev25 > 0) { yoyA += w.rev; yoyB += w.rev25; }
+  for (const w of paceSet) { yoyA += w.rev; yoyB += w.rev25; }
   const yoyGrowth = yoyB > 0 ? yoyA / yoyB - 1 : 0;
   const g = 1 + yoyGrowth;
   const recentBase = actualWeeks.length ? actualWeeks.slice(-4).reduce((s, w) => s + w.rev, 0) / Math.min(4, actualWeeks.length) : 0;
 
-  const weekly = (rev: number, actualLabor: number | null) => {
+  const weekly = (week: string, rev: number, actualLabor: number | null) => {
     const wl = actualLabor && actualLabor > 0 ? actualLabor : laborPct * rev;
-    const food = foodPct * rev;
+    const food = actualFood(week) ?? foodPct * rev;
     const gross = rev - wl - food; // gross margin: after labor + food
     const cost = wl + food + OPEX_PCT * rev + FIXED_WEEKLY; // + stubbed opex/debt/interest
     return { gross, cost };
@@ -750,11 +849,14 @@ export async function getPulse(): Promise<Pulse> {
   let cumRev = 0, cumCost = 0, cumProfit = 0, cumGross = 0, cumPrior = 0;
   let pRev = 0, pCost = 0, pProfit = 0, pGross = 0;
   let crossed = false;
+  let imputedLaborWeeks = 0, imputedFoodWeeks = 0;
   for (const w of yr) {
     cumPrior += w.rev25;
     const isActual = lastWeek != null && w.week <= lastWeek;
     if (isActual) {
-      const { gross, cost } = weekly(w.rev, w.labor);
+      if (!(w.labor > 0)) imputedLaborWeeks++;
+      if (actualFood(w.week) == null) imputedFoodWeeks++;
+      const { gross, cost } = weekly(w.week, w.rev, w.labor);
       cumRev += w.rev; cumCost += cost; cumProfit += w.rev - cost; cumGross += gross;
       points.push({ week: w.week, actualRevenue: cumRev, actualCost: cumCost, actualProfit: cumProfit, projRevenue: null, projCost: null, projProfit: null, priorYearRevenue: cumPrior });
     } else {
@@ -765,7 +867,7 @@ export async function getPulse(): Promise<Pulse> {
       }
       // Seasonal: prior-year weekly shape × YoY pace (fallback to run-rate).
       const fr = w.rev25 > 0 ? w.rev25 * g : recentBase;
-      const { gross, cost } = weekly(fr, null);
+      const { gross, cost } = weekly(w.week, fr, null);
       pRev += fr; pCost += cost; pProfit += fr - cost; pGross += gross;
       points.push({ week: w.week, actualRevenue: null, actualCost: null, actualProfit: null, projRevenue: pRev, projCost: pCost, projProfit: pProfit, priorYearRevenue: cumPrior });
     }
@@ -781,7 +883,7 @@ export async function getPulse(): Promise<Pulse> {
 
   return {
     points,
-    assumptions: { yoyGrowthPct: yoyGrowth, laborPct, foodPct },
+    assumptions: { yoyGrowthPct: yoyGrowth, laborPct, foodPct, imputedLaborWeeks, imputedFoodWeeks, actualWeeks: actualWeeks.length },
     stubbedCosts: STUBBED_COSTS,
     ytd,
     projectedYearEnd: { revenue: eRev, cost: eCost, profit: eProfit, grossProfit: eGross, marginPct: eRev ? eProfit / eRev : null, grossMarginPct: eRev ? eGross / eRev : null },
@@ -856,28 +958,9 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
     }
   }
 
-  // MoM / YoY (labor-focused) from weekly rollups — anchored to last complete month.
-  const monthly = monthlyBuckets(rollups);
-  const selYm = latestCompleteMonth(monthly);
-  const prevKey = prevYm(selYm);
-  const c = monthly.get(selYm) ?? emptyMonth();
-  const p = monthly.get(prevKey) ?? emptyMonth();
-  const mom: PeriodComparison = {
-    label: "Month over Month",
-    currentLabel: ymLabel(selYm),
-    priorLabel: ymLabel(prevKey),
-    sales: { current: c.s26 || null, prior: p.s26 || null, deltaPct: pctChange(c.s26 || null, p.s26 || null) },
-    labor: { current: c.l26 || null, prior: p.l26 || null, deltaPct: pctChange(c.l26 || null, p.l26 || null) },
-    laborPct: { current: c.s26 ? c.l26 / c.s26 : null, prior: p.s26 ? p.l26 / p.s26 : null },
-  };
-  const yoy: PeriodComparison = {
-    label: "Year over Year",
-    currentLabel: ymLabel(selYm),
-    priorLabel: `${Number(selYm.slice(0, 4)) - 1}`,
-    sales: { current: c.s26 || null, prior: c.s25 || null, deltaPct: pctChange(c.s26 || null, c.s25 || null) },
-    labor: { current: c.l26 || null, prior: c.l25 || null, deltaPct: pctChange(c.l26 || null, c.l25 || null) },
-    laborPct: { current: c.s26 ? c.l26 / c.s26 : null, prior: c.s25 ? c.l25 / c.s25 : null },
-  };
+  // MoM / YoY (labor-focused) from weekly rollups — anchored to last complete
+  // month, per-week averages via buildComparisons.
+  const comparisons = buildComparisons(monthlyBuckets(rollups));
 
   return {
     availableDates: weekStarts,
@@ -886,7 +969,7 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
     ytdLabor,
     projectedYearEndLabor: projTotal,
     assumptions: { weeklyGrowthPct: weeklyGrowth, laborPct: blendedLaborPct },
-    comparisons: { mom, yoy },
+    comparisons,
   };
 }
 
@@ -912,7 +995,6 @@ export interface LaborDetail {
     regularHours: number;
     otHours: number;
     hours: number;
-    scheduledHours: number; // STUB until When I Work schedule is connected
     cost: number;
     avgRate: number | null;
   }>;
@@ -920,8 +1002,12 @@ export interface LaborDetail {
 
 export async function getLaborDetail(department?: string): Promise<LaborDetail> {
   const where = department && department !== "all" ? { department } : {};
+  // "Latest Week Detail" means one week: clamp to the trailing 7 days of the
+  // newest timesheet entry, or every re-import silently multiplies the table.
+  const edge = await prisma.laborEntry.aggregate({ _max: { date: true } });
+  const weekWhere = edge._max.date ? { date: { gte: new Date(edge._max.date.getTime() - 6 * 86400000) } } : {};
   const [rows, allDepts] = await Promise.all([
-    prisma.laborEntry.findMany({ where, orderBy: { date: "asc" } }),
+    prisma.laborEntry.findMany({ where: { ...where, ...weekWhere }, orderBy: { date: "asc" } }),
     prisma.laborEntry.findMany({ select: { department: true }, distinct: ["department"] }),
   ]);
 
@@ -945,7 +1031,7 @@ export async function getLaborDetail(department?: string): Promise<LaborDetail> 
 
     const e = empMap.get(key) ?? {
       name, employeeId: r.employeeId ?? null, department: r.department ?? null,
-      regularHours: 0, otHours: 0, hours: 0, scheduledHours: 0, cost: 0, avgRate: null, rateSum: 0, rateN: 0,
+      regularHours: 0, otHours: 0, hours: 0, cost: 0, avgRate: null, rateSum: 0, rateN: 0,
     };
     e.regularHours += reg; e.otHours += ot; e.hours += reg + ot; e.cost += cost;
     if (rate != null) { e.rateSum += rate; e.rateN++; }
@@ -958,7 +1044,7 @@ export async function getLaborDetail(department?: string): Promise<LaborDetail> 
   }
 
   const byEmployee = [...empMap.values()]
-    .map((e) => ({ ...e, avgRate: e.rateN ? e.rateSum / e.rateN : null, scheduledHours: Math.round(e.hours) }))
+    .map((e) => ({ ...e, avgRate: e.rateN ? e.rateSum / e.rateN : null }))
     .map(({ rateSum, rateN, ...e }) => e)
     .sort((a, b) => b.cost - a.cost);
 
@@ -1034,10 +1120,16 @@ export async function getForwardPlanning(): Promise<ForwardPlanning> {
 
   const today = metrics.filter((m) => n(m.netSales) != null).map((m) => iso(m.date)).slice(-1)[0] ?? null;
 
-  // Weekly baseline hours + headcount + avg rate per department (timesheet week).
+  // Weekly baseline hours + headcount + avg rate per department, from the
+  // LATEST timesheet week only — unfiltered entries would treat 5+ imported
+  // weeks as one week's schedule and inflate every capacity number ~5×.
+  const maxEntryDate = entries.reduce<Date | null>((mx, r) => (mx == null || r.date > mx ? r.date : mx), null);
+  const weekEntries = maxEntryDate
+    ? entries.filter((r) => r.date.getTime() > maxEntryDate.getTime() - 7 * 86400000)
+    : entries;
   const dept = new Map<string, { hours: number; cost: number; emps: Set<string>; rate: number; rateN: number }>();
   const emp = new Map<string, { name: string; dept: string; hours: number; ot: number; rate: number | null; cost: number }>();
-  for (const r of entries) {
+  for (const r of weekEntries) {
     const d = r.department ?? "—";
     const hrs = (n(r.regularHours) ?? 0) + (n(r.otHours) ?? 0);
     const rate = n(r.hourlyRate);
@@ -1054,8 +1146,11 @@ export async function getForwardPlanning(): Promise<ForwardPlanning> {
   // Seasonal demand factor: next 2 weeks (prior-year shape × YoY) vs recent 2.
   const wk = rollups.filter((r) => iso(r.weekStart).startsWith("2026")).map((r) => ({ week: iso(r.weekStart), rev: n(r.totalRevenue) ?? 0, rev25: n(r.revenuePrev1) ?? 0 })).sort((a, b) => (a.week < b.week ? -1 : 1));
   const actual = wk.filter((w) => w.rev > 0);
+  // Trailing-8 matched-week pace (see getPulse) — full-year pace overshoots.
+  const matched = actual.filter((w) => w.rev25 > 0);
+  const paceWks = matched.length >= 3 ? matched.slice(-8) : matched;
   let yA = 0, yB = 0;
-  for (const w of actual) if (w.rev25 > 0) { yA += w.rev; yB += w.rev25; }
+  for (const w of paceWks) { yA += w.rev; yB += w.rev25; }
   const g = yB > 0 ? yA / yB : 1;
   const lastIdx = wk.findIndex((w) => w.week === (actual[actual.length - 1]?.week ?? ""));
   const recent2 = actual.slice(-2).reduce((s, w) => s + w.rev, 0) || 1;
@@ -1222,7 +1317,6 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
   const lookback = latestDate ? addDays(latestDate, -27) : null;
   const recent = actualDays.filter((m) => !lookback || (iso(m.date) > lookback && iso(m.date) <= latestDate!));
   const salesByDow = new Map<number, number[]>();
-  const hoursByDow = new Map<number, number[]>();
   const push = (m: Map<number, number[]>, k: number, v: number) => {
     const arr = m.get(k);
     if (arr) arr.push(v);
@@ -1232,10 +1326,27 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
   for (const m of recent) {
     const dow = m.date.getUTCDay();
     push(salesByDow, dow, n(m.netSales)!);
-    const lh = n(m.laborHours);
-    if (lh != null) push(hoursByDow, dow, lh);
     const lc = n(m.laborCost);
     if (lc != null && n(m.netSales)) { recLabor += lc; recSales += n(m.netSales)!; }
+  }
+
+  // Typical hours per weekday come from the WIW TIMESHEET history — the same
+  // universe of people the schedule export covers. (DailyMetric.laborHours
+  // spans all payroll, which runs ~40% higher and over-flags "short".)
+  // Averaged over the last 4 weeks of timesheet data, anchored to the
+  // timesheet's own edge since it lags the sales feed.
+  const hoursByDate = new Map<string, number>();
+  for (const r of laborEntries) {
+    const d = iso(r.date);
+    hoursByDate.set(d, (hoursByDate.get(d) ?? 0) + (n(r.regularHours) ?? 0) + (n(r.otHours) ?? 0));
+  }
+  const leDates = [...hoursByDate.keys()].sort();
+  const leEdge = leDates[leDates.length - 1] ?? null;
+  const leLookback = leEdge ? addDays(leEdge, -27) : null;
+  const hoursByDow = new Map<number, number[]>();
+  for (const [d, h] of hoursByDate) {
+    if (leLookback && d <= leLookback) continue;
+    push(hoursByDow, new Date(`${d}T00:00:00Z`).getUTCDay(), h);
   }
   const avgOf = (m: Map<number, number[]>, k: number): number | null => {
     const arr = m.get(k);
