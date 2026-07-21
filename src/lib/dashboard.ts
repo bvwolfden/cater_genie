@@ -289,15 +289,40 @@ export async function getDashboard(opts?: {
     .filter((c) => c.actual > 0 || c.projected > 0)
     .sort((a, b) => b.actual - a.actual);
 
-  const weekly = rollupRows
-    .filter((r) => r.totalRevenue != null || r.projectedTotal != null)
+  // Weekly revenue: actuals + prior year, with a forward projection that begins
+  // at the last actual week (prior-year weekly shape × current YoY pace — same
+  // model as the Pulse; run-rate fallback when prior year is missing).
+  // `projected` is null for history so the dashed line only spans the future;
+  // the boundary week carries both values so the two segments connect.
+  const wkAll = rollupRows
+    .filter((r) => iso(r.weekStart).startsWith("2026"))
     .map((r) => ({
       weekStart: iso(r.weekStart),
       total: n(r.totalRevenue),
       priorYear: n(r.revenuePrev1),
-      projected: n(r.projectedTotal),
       laborPct: n(r.laborPct),
-    }));
+    }))
+    .sort((a, b) => (a.weekStart < b.weekStart ? -1 : 1));
+  const wkActuals = wkAll.filter((w) => (w.total ?? 0) > 0);
+  const lastActualWk = wkActuals.length ? wkActuals[wkActuals.length - 1].weekStart : null;
+  let wkPaceNum = 0, wkPaceDen = 0;
+  for (const w of wkActuals) if ((w.priorYear ?? 0) > 0) { wkPaceNum += w.total!; wkPaceDen += w.priorYear!; }
+  const wkPace = wkPaceDen > 0 ? wkPaceNum / wkPaceDen : 1;
+  const wkRunRate = wkActuals.length
+    ? wkActuals.slice(-4).reduce((s, w) => s + w.total!, 0) / Math.min(4, wkActuals.length)
+    : 0;
+  const weekly: Dashboard["weekly"] = [];
+  let futureWks = 0;
+  for (const w of wkAll) {
+    if (lastActualWk == null || w.weekStart <= lastActualWk) {
+      if (w.total == null && w.priorYear == null) continue;
+      weekly.push({ ...w, projected: w.weekStart === lastActualWk ? w.total : null });
+    } else if (futureWks < 4) {
+      futureWks++;
+      const f = (w.priorYear ?? 0) > 0 ? w.priorYear! * wkPace : wkRunRate;
+      weekly.push({ weekStart: w.weekStart, total: null, priorYear: w.priorYear, projected: Math.round(f), laborPct: null });
+    }
+  }
 
   // Source/connector status + latest sync run per source.
   const lastRuns = await prisma.syncRun.findMany({

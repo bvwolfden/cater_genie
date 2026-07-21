@@ -98,13 +98,13 @@ export default async function Page({
           <Card className="card-pad">
             <SectionHeader
               title="Weekly Revenue vs Prior Year & Projection"
-              subtitle="Weekly revenue · last 16 weeks · vs last year and plan"
+              subtitle="Weekly revenue · last 16 weeks · dashed = projected ahead"
               right={
                 <ChartLegend
                   items={[
                     { color: "#FF385C", label: "2026 revenue" },
                     { color: "#A6A6A6", label: "Prior year" },
-                    { color: "#FFB400", label: "Projection" },
+                    { color: "#FFB400", label: "Actual → projected" },
                   ]}
                 />
               }
