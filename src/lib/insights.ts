@@ -140,16 +140,9 @@ function rulesEngine(d: Dashboard): InsightResult {
   if (k.cashPosition != null)
     alerts.push({ severity: k.cashPosition < 0 ? "warn" : "info", title: "Cash position", detail: `Across tracked accounts: ${money(k.cashPosition)}.` });
 
-  // Projection variance on the most recent week with data.
-  const lastWeek = d.weekly.filter((w) => w.total != null && w.projected != null).slice(-1)[0];
-  if (lastWeek && lastWeek.projected) {
-    const variance = (lastWeek.total! - lastWeek.projected) / lastWeek.projected;
-    alerts.push({
-      severity: variance < -0.1 ? "warn" : "info",
-      title: variance >= 0 ? "Ahead of projection" : "Behind projection",
-      detail: `Week of ${lastWeek.weekStart}: ${money(lastWeek.total)} vs projected ${money(lastWeek.projected)} (${percent(variance)}).`,
-    });
-  }
+  // (No "vs projection" alert here: `weekly` anchors projected == actual on
+  // the boundary week by construction, so that variance is always 0. Real
+  // forecast-vs-actual scoring lives in the Forecast table / accuracy chip.)
 
   // Best day in the series.
   const best = [...d.series].filter((s) => s.netSales != null).sort((a, b) => b.netSales! - a.netSales!)[0];

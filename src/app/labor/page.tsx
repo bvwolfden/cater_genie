@@ -77,7 +77,7 @@ export default async function LaborPage({
       {/* Period KPIs — compared to the SAME period last year */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <LaborStat
-          label={`Labor $ · ${rangeLabel}`}
+          label={`Payroll $ · ${rangeLabel}`}
           value={money(a.range.laborCost)}
           deltaValue={deltaPct(a.range.laborCost, a.range.laborPrev)}
           deltaLabel="vs same period 2025"
@@ -85,7 +85,7 @@ export default async function LaborPage({
           spark={weeklySpark}
         />
         <LaborStat
-          label={`Labor % · ${rangeLabel}`}
+          label={`Payroll % · ${rangeLabel}`}
           value={percent(a.range.laborPct)}
           accent={(a.range.laborPct ?? 0) >= 0.5 ? "text-rose" : (a.range.laborPct ?? 0) >= 0.35 ? "text-amber" : "text-mint"}
           deltaValue={deltaPct(a.range.laborPct, a.range.laborPctPrev)}
@@ -94,12 +94,16 @@ export default async function LaborPage({
         />
         <LaborStat label={`Hours · ${rangeLabel}`} value={hours(a.range.hours)} sub={`${a.range.weeks} weeks`} />
         <LaborStat
-          label="Projected Labor · Year-end"
+          label="Projected Payroll · Year-end"
           value={money(a.projectedYearEndLabor)}
           accent="text-ink-2"
-          sub={`from ${money(a.ytdLabor)} YTD`}
+          sub={`modeled · from ${money(a.ytdLabor)} YTD`}
         />
       </div>
+      <p className="mt-2 text-[11px] text-ink-3">
+        Payroll figures come from the weekly comp sheet (loaded cost) — the timesheet-based wages
+        shown on the dashboard KPIs run materially lower. Reconciliation flags live in Data Quality.
+      </p>
 
       {/* Staffing outlook — real imported schedule vs typical staffing */}
       <div className="mt-4">

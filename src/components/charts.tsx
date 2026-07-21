@@ -56,7 +56,12 @@ export function SalesTrendChart({
     .filter((d) => d.netSales != null)
     .map((d) => ({
       ...d,
-      grossMargin: d.netSales! - (d.laborCost ?? 0) - (d.foodPurchases ?? 0),
+      // Margin needs both costs — coercing a missing labor/food day to $0
+      // would spike the teal line on exactly the days data is missing.
+      grossMargin:
+        d.laborCost != null && d.foodPurchases != null
+          ? d.netSales! - d.laborCost - d.foodPurchases
+          : null,
     }));
   // Weekend bands (Sat–Sun) — sales are lumpy by day-of-week (weddings weekend,
   // corporate delivery weekday).

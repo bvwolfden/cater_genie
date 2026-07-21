@@ -51,10 +51,10 @@ function Panel({ cmp, icon, spark, sparkLabel }: { cmp: PeriodComparison; icon: 
         <span className="w-16 text-right">change</span>
       </div>
       <div className="divide-y divide-line">
-        <Row metric="Net sales" current={cmp.sales.current} prior={cmp.sales.prior} deltaPct={cmp.sales.deltaPct} />
-        <Row metric="Labor $" current={cmp.labor.current} prior={cmp.labor.prior} deltaPct={cmp.labor.deltaPct} upIsGood={false} />
+        <Row metric="Net sales / wk" current={cmp.sales.current} prior={cmp.sales.prior} deltaPct={cmp.sales.deltaPct} />
+        <Row metric="Payroll $ / wk" current={cmp.labor.current} prior={cmp.labor.prior} deltaPct={cmp.labor.deltaPct} upIsGood={false} />
         <div className="flex items-center justify-between py-2">
-          <span className="text-sm text-ink-2">Labor %</span>
+          <span className="text-sm text-ink-2">Payroll %</span>
           <div className="flex items-center gap-3">
             <span className="text-xs tabular-nums text-ink-3">{cmp.laborPct.prior != null ? percent(cmp.laborPct.prior) : "n/a"}</span>
             <span className={cn("text-sm font-semibold tabular-nums", (cmp.laborPct.current ?? 0) >= 0.35 ? "text-amber" : "text-mint")}>
@@ -93,7 +93,7 @@ export function ComparisonPanels({ mom, yoy, spark, sparkLabel }: { mom: PeriodC
 export function Comparisons({ data }: { data: Dashboard }) {
   return (
     <Card className="card-pad">
-      <SectionHeader title="Comparisons" subtitle="Last complete month · vs prior month and prior year" />
+      <SectionHeader title="Comparisons" subtitle="Last complete month · per-week averages vs prior month and prior year" />
       <ComparisonPanels
         mom={data.comparisons.mom}
         yoy={data.comparisons.yoy}
@@ -101,7 +101,8 @@ export function Comparisons({ data }: { data: Dashboard }) {
         sparkLabel="weekly revenue trend"
       />
       <p className="mt-3 text-[11px] text-ink-3">
-        Comparisons computed from weekly revenue & labor (2026 vs 2025).
+        Per-week averages over weeks with data (months differ in week count and labor coverage).
+        Payroll here is the weekly comp sheet&apos;s loaded figure — daily KPI labor uses timesheet wages, a lower basis.
       </p>
     </Card>
   );
