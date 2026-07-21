@@ -1,5 +1,6 @@
 import "server-only";
 import { llmComplete, hasLlmKey } from "./llm";
+import { SEASONALITY_CONTEXT } from "./seasonality";
 import { getDataQuality } from "./quality";
 import { prisma } from "./db";
 import type { Dashboard } from "./dashboard";
@@ -194,7 +195,8 @@ async function llmInsight(d: Dashboard, recentForecasts: ForecastTrackRecord = [
     "You are the operations analyst for a restaurant/catering company. You read a daily metrics snapshot and produce sharp, specific, numeric insights a GM can act on this morning. Be concise. Prefer concrete numbers and dollar figures over generic advice. Flag real risks: labor % above ~35% of sales, negative cash/operating balances, weeks tracking behind projection. Never invent data not present.\n\n" +
     "You must also commit to a falsifiable forecast for the NEXT operating day and the next 7 days. Use the day-of-week pattern in recentDays, recent trend, and — critically — `yourRecentForecasts`, which shows how your own past calls compared to the actuals. Learn from those errors: if you have been consistently high or low, correct. A simple weekday-average baseline is provided; only deviate from it when the data justifies it (e.g. an obvious event spike or a trend).\n\n" +
     "`dataQualityFlags` lists days whose numbers look inconsistent across sources or unusual. Treat those figures skeptically: do not build conclusions on a flagged number without noting the doubt, and if a flagged day matters to your analysis, say so plainly (e.g. 'if Tuesday's entry is right, ...'). The data comes from manual entry — part of your job is catching human mistakes, not laundering them into confident narrative.\n\n" +
-    "Check the calendar around the forecast target: US holidays and holiday-adjacent days (July 4th week, Memorial Day, Labor Day, Thanksgiving, Christmas...) shift demand sharply — corporate delivery dies on office holidays while event/catering can spike. Adjust for them explicitly; a weekday-average baseline knows nothing about holidays.";
+    "Check the calendar around the forecast target: US holidays and holiday-adjacent days (July 4th week, Memorial Day, Labor Day, Thanksgiving, Christmas...) shift demand sharply — corporate delivery dies on office holidays while event/catering can spike. Adjust for them explicitly; a weekday-average baseline knows nothing about holidays.\n\n" +
+    SEASONALITY_CONTEXT;
 
   const prompt =
     "Here is today's snapshot as JSON:\n\n" +

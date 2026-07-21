@@ -899,7 +899,7 @@ export interface LaborAnalysis {
   weekly: { week: string; actualLabor: number | null; actualLaborPct: number | null; projLabor: number | null }[];
   ytdLabor: number;
   projectedYearEndLabor: number;
-  assumptions: { weeklyGrowthPct: number; laborPct: number };
+  assumptions: { yoyRevenuePace: number; fixedWeeklyLabor: number; variableLaborPct: number; laborPct: number };
   comparisons: { mom: PeriodComparison; yoy: PeriodComparison };
 }
 
@@ -925,19 +925,45 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
   const rRevPrev = inR.reduce((s, w) => s + w.revPrev, 0);
   const range = { from, to, laborCost: rLabor, laborPrev: rLaborPrev, hours: rHours, laborPct: rRev ? rLabor / rRev : null, laborPctPrev: rRevPrev ? rLaborPrev / rRevPrev : null, weeks: inR.length };
 
-  // Weekly labor trend (2026 actual) + projection to year-end.
+  // Weekly labor trend (2026 actual) + seasonal projection to year-end.
+  // Future revenue = prior-year same-week revenue × this year's YoY pace (the
+  // comp sheet carries 2023–2025 weeks, which encode the real seasonality:
+  // Sep–Oct event peak, early-Dec holiday-party spike, dead late Dec / Jan).
+  // Labor is then fixed base + variable share of revenue, fit on this year's
+  // weeks — slow weeks floor near the fixed base (Jan ran >100% of revenue),
+  // peak weeks compress toward the variable rate.
   const wk = rollups
     .filter((r) => (n(r.laborCost) ?? 0) > 0)
     .map((r) => ({ week: iso(r.weekStart), labor: n(r.laborCost) ?? 0, pct: n(r.laborPct), revenue: n(r.totalRevenue) ?? 0 }));
   const totalRev = wk.reduce((s, w) => s + w.revenue, 0);
   const totalLab = wk.reduce((s, w) => s + w.labor, 0);
   const blendedLaborPct = totalRev ? totalLab / totalRev : 0.4;
-  const labs = wk.map((w) => w.labor);
-  const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-  const recent = avg(labs.slice(-4));
-  const earlier = avg(labs.slice(-8, -4));
-  let weeklyGrowth = earlier > 0 ? Math.pow(recent / earlier, 1 / 4) - 1 : 0;
-  weeklyGrowth = Math.max(-0.01, Math.min(0.01, weeklyGrowth));
+
+  const yoyPaired = rollups
+    .map((r) => ({ rev: n(r.totalRevenue) ?? 0, prev: n(r.revenuePrev1) ?? 0 }))
+    .filter((p) => p.rev > 0 && p.prev > 0);
+  const yoyPace = yoyPaired.length
+    ? yoyPaired.reduce((s, p) => s + p.rev, 0) / yoyPaired.reduce((s, p) => s + p.prev, 0)
+    : 1;
+
+  // Least-squares labor = fixed + variable·revenue over this year's weeks.
+  let fixedLab = 0;
+  let varLab = blendedLaborPct;
+  const fitPts = wk.filter((w) => w.revenue > 0);
+  if (fitPts.length >= 4) {
+    const m = fitPts.length;
+    const sx = fitPts.reduce((s, p) => s + p.revenue, 0);
+    const sy = fitPts.reduce((s, p) => s + p.labor, 0);
+    const sxx = fitPts.reduce((s, p) => s + p.revenue * p.revenue, 0);
+    const sxy = fitPts.reduce((s, p) => s + p.revenue * p.labor, 0);
+    const denom = m * sxx - sx * sx;
+    const slope = denom > 0 ? (m * sxy - sx * sy) / denom : NaN;
+    const intercept = (sy - slope * sx) / m;
+    if (Number.isFinite(slope) && slope >= 0 && slope <= 1 && intercept >= 0) {
+      varLab = slope;
+      fixedLab = intercept;
+    }
+  }
 
   const weekly: LaborAnalysis["weekly"] = wk.map((w) => ({ week: w.week, actualLabor: w.labor, actualLaborPct: w.pct, projLabor: null }));
   let ytdLabor = totalLab;
@@ -945,16 +971,21 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
   const lastWeek = wk.length ? wk[wk.length - 1].week : null;
   if (weekly.length) weekly[weekly.length - 1].projLabor = wk[wk.length - 1].labor;
   if (lastWeek) {
-    const base = recent > 0 ? recent : labs[labs.length - 1] ?? 0;
-    const yearEnd = `${lastWeek.slice(0, 4)}-12-31`;
-    let cur = lastWeek, k = 1;
-    while (true) {
-      cur = addDays(cur, 7);
-      if (cur > yearEnd) break;
-      const fl = base * Math.pow(1 + weeklyGrowth, k);
+    const future = rollups
+      .map((r) => ({
+        week: iso(r.weekStart),
+        rev: n(r.totalRevenue) ?? 0,
+        prev: [n(r.revenuePrev1), n(r.revenuePrev2), n(r.revenuePrev3)].find((v) => (v ?? 0) > 0) ?? 0,
+      }))
+      .filter((f) => f.week > lastWeek)
+      .sort((a, b) => (a.week < b.week ? -1 : 1));
+    for (const f of future) {
+      // Weeks whose revenue is already recorded (revenue lands before payroll)
+      // use the actual; otherwise prior-year same-week × current pace.
+      const revProj = f.rev > 0 ? f.rev : f.prev * yoyPace;
+      const fl = Math.max(0, fixedLab + varLab * revProj);
       projTotal += fl;
-      weekly.push({ week: cur, actualLabor: null, actualLaborPct: blendedLaborPct, projLabor: fl });
-      k++;
+      weekly.push({ week: f.week, actualLabor: null, actualLaborPct: revProj > 0 ? fl / revProj : null, projLabor: fl });
     }
   }
 
@@ -968,7 +999,7 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
     weekly,
     ytdLabor,
     projectedYearEndLabor: projTotal,
-    assumptions: { weeklyGrowthPct: weeklyGrowth, laborPct: blendedLaborPct },
+    assumptions: { yoyRevenuePace: yoyPace, fixedWeeklyLabor: fixedLab, variableLaborPct: varLab, laborPct: blendedLaborPct },
     comparisons,
   };
 }
