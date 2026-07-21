@@ -12,6 +12,7 @@ function Stat({
   accent = "text-ink",
   delta,
   deltaUpIsGood = true,
+  deltaCaption,
   badge,
 }: {
   label: string;
@@ -19,6 +20,8 @@ function Stat({
   accent?: string;
   delta?: number | null;
   deltaUpIsGood?: boolean;
+  /** Names the delta's baseline (e.g. "vs same wk 2025") — required with delta. */
+  deltaCaption?: string;
   badge?: React.ReactNode;
 }) {
   return (
@@ -31,6 +34,9 @@ function Stat({
         <span className={cn("text-lg font-semibold tabular-nums", accent)}>{value}</span>
         {delta != null && <Delta value={delta} upIsGood={deltaUpIsGood} />}
       </div>
+      {delta != null && deltaCaption && (
+        <div className="mt-0.5 text-[10px] text-ink-3">{deltaCaption}</div>
+      )}
     </div>
   );
 }
@@ -107,12 +113,14 @@ export function ExecStrips({
           label="Week"
           value={money(revWeek.total)}
           delta={deltaPct(revWeek.total, revWeek.priorYear)}
+          deltaCaption="vs same wk 2025"
         />
         {data.kpis.mtdNetSales != null && (
           <Stat
             label={data.kpis.monthLabel ? `${data.kpis.monthLabel} MTD` : "MTD"}
             value={money(data.kpis.mtdNetSales)}
             delta={deltaPct(data.kpis.mtdNetSales, data.kpis.mtdNetSalesPrevSpan)}
+            deltaCaption={data.kpis.mtdPriorLabel ? `vs ${data.kpis.mtdPriorLabel}` : undefined}
           />
         )}
         {nextProj && (
