@@ -239,9 +239,18 @@ export function WeeklyCompChart({
 export function LaborTrendChart({
   weekly,
   boundary,
+  model,
 }: {
-  weekly: { week: string; actualLabor: number | null; projLabor: number | null }[];
+  weekly: {
+    week: string;
+    actualLabor: number | null;
+    projLabor: number | null;
+    basisRevenue?: number | null;
+    basisPriorRevenue?: number | null;
+    basisIsActual?: boolean;
+  }[];
   boundary: string | null;
+  model?: { yoyRevenuePace: number; fixedWeeklyLabor: number; variableLaborPct: number };
 }) {
   return (
     <ResponsiveContainer width="100%" height={280}>
@@ -254,15 +263,35 @@ export function LaborTrendChart({
           cursor={{ stroke: "#DDDDDD" }}
           content={({ active, payload, label }) => {
             if (!active || !payload?.length) return null;
-            const p = payload[0].payload as { actualLabor: number | null; projLabor: number | null };
+            const p = payload[0].payload as {
+              actualLabor: number | null;
+              projLabor: number | null;
+              basisRevenue?: number | null;
+              basisPriorRevenue?: number | null;
+              basisIsActual?: boolean;
+            };
             const v = p.actualLabor ?? p.projLabor;
             const projected = p.actualLabor == null;
             return (
-              <div className="rounded-xl border border-line bg-white px-3 py-2 text-xs shadow-card">
+              <div className="max-w-[19rem] rounded-xl border border-line bg-white px-3 py-2 text-xs shadow-card">
                 <div className="mb-1 font-semibold text-ink">
                   Week of {shortDate(label as string)} {projected && <span className="text-ink-3">· projected</span>}
                 </div>
                 <div className="text-amber">Labor {money(v)}</div>
+                {projected && model && p.basisRevenue != null && (
+                  <div className="mt-1.5 border-t border-line/60 pt-1.5 text-[10.5px] leading-relaxed text-ink-3">
+                    {p.basisIsActual ? (
+                      <>Revenue already recorded at {money(p.basisRevenue)} (payroll pending).</>
+                    ) : (
+                      <>
+                        Last year this week did {money(p.basisPriorRevenue)}; at 2026&apos;s {model.yoyRevenuePace.toFixed(2)}× pace
+                        that&apos;s {money(p.basisRevenue)} projected revenue.
+                      </>
+                    )}{" "}
+                    Labor = {money(model.fixedWeeklyLabor)} fixed base + {(model.variableLaborPct * 100).toFixed(1)}% of revenue ={" "}
+                    {money(v)}.
+                  </div>
+                )}
               </div>
             );
           }}

@@ -1,6 +1,7 @@
 import type { Dashboard } from "@/lib/dashboard";
 import { money, percent, weekdayDate, laborHealth } from "@/lib/format";
 import { Card, SectionHeader, ProjBadge } from "./primitives";
+import { Explain } from "./Explain";
 import { cn } from "@/lib/cn";
 
 export function DailyLedger({ data }: { data: Dashboard }) {
@@ -22,6 +23,24 @@ export function DailyLedger({ data }: { data: Dashboard }) {
           <span className="flex items-center gap-2">
             Daily Ledger
             <ProjBadge />
+            <Explain
+              align="left"
+              title="Projected days — how the italic rows are built"
+              steps={[
+                {
+                  label: "Net sales",
+                  detail: "The median for that weekday over the last 28 days of actuals — next Tuesday is predicted by recent Tuesdays. Median, not average, so one holiday-skewed week doesn't drag every projection.",
+                },
+                {
+                  label: "Labor $ and hours",
+                  detail: "Also weekday medians from recent history — labor is mostly a scheduled cost (a slow Monday still staffs the kitchen), so it is NOT projected as a % of sales. Labor % is just the two projections divided.",
+                },
+                {
+                  label: "What this can't see",
+                  detail: "Holidays, one-off catering spikes, and weather. Booked events show up in the Staffing Outlook and Booked Ahead panels — cross-check big days there.",
+                },
+              ]}
+            />
           </span>
         }
         subtitle="Next 10 days projected (italic) · then recent actuals"

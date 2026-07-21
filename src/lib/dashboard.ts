@@ -116,6 +116,8 @@ export interface Dashboard {
     projected: number | null;
     laborPct: number | null;
   }>;
+  /** Inputs behind `weekly[].projected`, for derivation popovers. */
+  weeklyProjection: { pace: number; paceWeeks: number; runRate: number } | null;
   sources: Array<{
     system: SourceSystem;
     label: string;
@@ -740,6 +742,7 @@ export async function getDashboard(opts?: {
     channelMix,
     channelMixRange: { from: recentWeeks[0] ?? null, to: recentWeeks[recentWeeks.length - 1] ?? null, weeks: recentWeeks.length },
     weekly,
+    weeklyProjection: wkPaceDen > 0 ? { pace: wkPace, paceWeeks: wkPaceSet.length, runRate: wkRunRate } : null,
     sources,
   };
 }
@@ -896,7 +899,16 @@ export async function getPulse(): Promise<Pulse> {
 export interface LaborAnalysis {
   availableDates: string[];
   range: { from: string | null; to: string | null; laborCost: number; laborPrev: number; hours: number; laborPct: number | null; laborPctPrev: number | null; weeks: number };
-  weekly: { week: string; actualLabor: number | null; actualLaborPct: number | null; projLabor: number | null }[];
+  weekly: {
+    week: string;
+    actualLabor: number | null;
+    actualLaborPct: number | null;
+    projLabor: number | null;
+    // Derivation inputs for projected weeks (surfaced in tooltips):
+    basisRevenue?: number | null; // revenue the labor projection was computed from
+    basisPriorRevenue?: number | null; // prior-year same-week revenue (null when actual revenue was used)
+    basisIsActual?: boolean; // true when this week's revenue is already recorded
+  }[];
   ytdLabor: number;
   projectedYearEndLabor: number;
   assumptions: { yoyRevenuePace: number; fixedWeeklyLabor: number; variableLaborPct: number; laborPct: number };
@@ -982,10 +994,19 @@ export async function getLaborAnalysis(opts?: { from?: string; to?: string }): P
     for (const f of future) {
       // Weeks whose revenue is already recorded (revenue lands before payroll)
       // use the actual; otherwise prior-year same-week × current pace.
-      const revProj = f.rev > 0 ? f.rev : f.prev * yoyPace;
+      const usedActual = f.rev > 0;
+      const revProj = usedActual ? f.rev : f.prev * yoyPace;
       const fl = Math.max(0, fixedLab + varLab * revProj);
       projTotal += fl;
-      weekly.push({ week: f.week, actualLabor: null, actualLaborPct: revProj > 0 ? fl / revProj : null, projLabor: fl });
+      weekly.push({
+        week: f.week,
+        actualLabor: null,
+        actualLaborPct: revProj > 0 ? fl / revProj : null,
+        projLabor: fl,
+        basisRevenue: revProj || null,
+        basisPriorRevenue: usedActual ? null : f.prev || null,
+        basisIsActual: usedActual,
+      });
     }
   }
 

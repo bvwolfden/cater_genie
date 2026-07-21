@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Sparkles, RefreshCw, AlertTriangle, Info, OctagonAlert, Target } from "lucide-react";
 import { ProjBadge } from "./primitives";
+import { Explain } from "./Explain";
 import { cn } from "@/lib/cn";
 
 type Alert = { severity: "info" | "warn" | "alert"; title: string; detail: string };
@@ -125,6 +126,29 @@ export function InsightsPanel({ initial }: { initial: Insight }) {
                 Forecast · {shortDate(insight.forecast.targetDate)}
               </span>
               <ProjBadge />
+              <Explain
+                title="This forecast — how it's made"
+                steps={[
+                  {
+                    label: "Deterministic baseline",
+                    detail:
+                      insight.forecast.baselineNetSales != null
+                        ? `A weekday-seasonality baseline (recent same-weekday history) predicts ${usd(insight.forecast.baselineNetSales)} for this day.`
+                        : "A weekday-seasonality baseline (recent same-weekday history) is computed first.",
+                  },
+                  {
+                    label: "AI adjustment",
+                    detail: `Claude reads the full snapshot — recent days, weekly trend, booked events, data-quality flags, industry seasonality (holidays, event season) — and commits to ${usd(insight.forecast.netSales)}. Its stated reasoning is quoted below the number.`,
+                  },
+                  {
+                    label: "Scored against reality",
+                    detail:
+                      acc && acc.n > 0 && acc.mapePct != null
+                        ? `Every forecast is stored and scored the next day. Over the last ${acc.n} scored days the AI has been off by ±${(acc.mapePct * 100).toFixed(0)}% on average${acc.baselineMapePct != null ? `, vs ±${(acc.baselineMapePct * 100).toFixed(0)}% for the naive baseline` : ""}. That track record is fed back into the next forecast.`
+                        : "Every forecast is stored and scored against actuals the next day; the track record is fed back into future forecasts.",
+                  },
+                ]}
+              />
               {fc.accChip && (
                 <span className="ml-auto rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-medium text-ink-2">
                   {fc.accChip}
