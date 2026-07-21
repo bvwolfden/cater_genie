@@ -1304,10 +1304,13 @@ export async function getForwardPlanning(): Promise<ForwardPlanning> {
 }
 
 // ---------------------------------------------------------------------------
-// Staffing outlook — REAL scheduled shifts (When I Work schedule import) vs
-// projected demand. Demand per day = per-weekday norms from the last 4 weeks
-// of actuals, scaled up when bookings land on the day. This is the "are we
-// over/under-staffed next week?" signal Kevin currently eyeballs by hand.
+// Staffing outlook — REAL scheduled shifts (When I Work schedule import)
+// judged the way this operation actually runs. Preferred benchmark: the
+// schedule build-curve from the WIW audit log (hours usually booked this many
+// days out). Fallback: typical worked hours calibrated by the lean-schedule
+// ratio (schedules here run ~30% under worked), a capped booked-event uplift,
+// and a back-loaded build allowance — raw scheduled-vs-worked comparisons
+// flagged every normal lean day as understaffed.
 // ---------------------------------------------------------------------------
 export interface StaffingDay {
   date: string;
@@ -1325,8 +1328,10 @@ export interface StaffingDay {
   leadDays: number | null;
   /** Which benchmark produced expectedHours/status. */
   benchmark: "curve" | "worked" | "none";
-  expectedHours: number | null; // curve: typicalByNow · worked: weekday-typical × demand
+  expectedHours: number | null; // curve: typicalByNow · worked: lean-calibrated weekday expectation by now
   gapHours: number | null; // scheduled − expected
+  /** Avg overtime hours this weekday has historically absorbed (timesheets). */
+  typicalOtHours: number | null;
   scheduledLaborPct: number | null; // scheduled cost ÷ projected sales
   status: "short" | "ok" | "over" | "unknown";
   events: { name: string; revenue: number | null; guests: number | null }[];
@@ -1371,6 +1376,21 @@ const HOUR_TOLERANCE = 0.15; // ±15% of expected hours reads as "ok" (worked be
 // event-driven variance. Only flag what a manager would actually act on.
 const PACE_BEHIND = 0.6; // booked < 60% of usually-booked-by-now
 const PACE_AHEAD = 1.6;
+// Fallback calibration (no audit-log curve samples yet) — the same rules used
+// elsewhere in the app, so a lean-by-design schedule doesn't read as a crisis:
+// · Schedules here historically run ~30% UNDER worked hours (shifts get added
+//   and extended in real time). Scheduled-vs-worked comparisons use the
+//   measured sched/worked ratio; this default holds until ≥3 overlap days exist.
+const SCHED_VS_WORKED_DEFAULT = 0.72;
+// · The recent per-weekday sales average already includes the normal booked-
+//   event mix — stacking full event revenue on top double-counts demand.
+const DEMAND_RATIO_CAP = 1.25;
+// · Kevin builds most of each week in the final days (~90% of hours land ≤6
+//   days out per the audit-log research). Until the real curve has samples,
+//   assume a back-loaded build when judging days still days away.
+const fallbackBuildFrac = (lead: number) =>
+  0.1 + 0.9 * Math.pow((7 - Math.min(Math.max(lead, 0), 7)) / 7, 1.5);
+const FALLBACK_TOLERANCE = 0.25; // cruder benchmark → wider "ok" band
 
 const median = (a: number[]): number | null => {
   if (!a.length) return null;
@@ -1441,6 +1461,31 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
     return arr?.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
   };
   const benchmarkLaborPct = recSales ? recLabor / recSales : null;
+
+  // Overtime by weekday (all timesheet history): where lean scheduling has
+  // actually been biting — hours covered after the fact at OT rates.
+  const otByDate = new Map<string, number>();
+  for (const r of laborEntries) {
+    const d = iso(r.date);
+    otByDate.set(d, (otByDate.get(d) ?? 0) + (n(r.otHours) ?? 0));
+  }
+  const otByDow = new Map<number, number[]>();
+  for (const [d, h] of otByDate) push(otByDow, new Date(`${d}T00:00:00Z`).getUTCDay(), h);
+
+  // Previous schedules vs actuals: measured sched/worked ratio on complete
+  // days where both exist. Until ≥3 samples accumulate, the documented
+  // ~30%-lean default applies.
+  const schedPastByDate = new Map<string, number>();
+  for (const s of shifts) {
+    const d = iso(s.date);
+    if (leEdge && d < leEdge) schedPastByDate.set(d, (schedPastByDate.get(d) ?? 0) + (n(s.hours) ?? 0));
+  }
+  const leanSamples: number[] = [];
+  for (const [d, sch] of schedPastByDate) {
+    const wk = hoursByDate.get(d);
+    if (wk && sch > 0) leanSamples.push(sch / wk);
+  }
+  const leanCalib = leanSamples.length >= 3 ? median(leanSamples)! : SCHED_VS_WORKED_DEFAULT;
 
   // --- Schedule build-curve from the WIW audit log ---------------------------
   // Kevin creates most of each week's shifts in the final days before they
@@ -1548,8 +1593,13 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
   };
   const curveBased = cumByDow.size > 0;
   // The schedule snapshot is current through the newest audit event (the
-  // exports are taken together); fall back to the sales data edge.
-  const asOf = evMax ?? latestDate;
+  // exports are taken together); else the schedule import time — the sales
+  // edge can lag days behind and would inflate every lead time.
+  const shiftSnap = upcoming.reduce<string | null>((mx, s) => {
+    const c = iso(s.createdAt);
+    return !mx || c > mx ? c : mx;
+  }, null);
+  const asOf = evMax ?? shiftSnap ?? latestDate;
 
   // Booked events by date (real bookings only — no stubs here).
   const eventsByDate = new Map<string, { name: string; revenue: number | null; guests: number | null }[]>();
@@ -1595,7 +1645,7 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
 
     const leadDays = asOf ? Math.max(daysBetween(asOf, d), 0) : null;
     const typicalByNow = leadDays != null ? typicalByLead(dow, leadDays) : null;
-    const typicalFinal = typicalFinalOf(dow);
+    let typicalFinal = typicalFinalOf(dow);
 
     let benchmark: StaffingDay["benchmark"];
     let expectedHours: number | null;
@@ -1612,19 +1662,28 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
             ? "over"
             : "ok";
     } else {
-      // Fallback: weekday-typical worked hours scaled for booked demand.
-      const ratio = baseSales ? clamp((baseSales + eventRev) / baseSales, 1, 2) : 1;
+      // Fallback: no curve samples yet. Judge against what a SCHEDULE for this
+      // weekday should hold by now — typical worked hours × the lean-schedule
+      // calibration × a capped event uplift × a back-loaded build allowance.
+      // Raw "scheduled vs worked" flagged every normal lean day red.
+      const ratio = baseSales ? clamp((baseSales + eventRev) / baseSales, 1, DEMAND_RATIO_CAP) : 1;
       const typicalWorked = avgOf(hoursByDow, dow);
-      expectedHours = typicalWorked != null ? typicalWorked * ratio : null;
+      const finalExpected = typicalWorked != null ? typicalWorked * leanCalib * ratio : null;
+      expectedHours =
+        finalExpected != null && leadDays != null ? finalExpected * fallbackBuildFrac(leadDays) : finalExpected;
       benchmark = expectedHours != null ? "worked" : "none";
+      // "Over" is judged against what's typically WORKED (not the lean
+      // schedule) — being above even that is genuinely heavy.
+      const heavyAbove = typicalWorked != null ? typicalWorked * ratio : null;
       status =
         expectedHours == null || expectedHours === 0
           ? "unknown"
-          : v.hours < expectedHours * (1 - HOUR_TOLERANCE)
+          : v.hours < expectedHours * (1 - FALLBACK_TOLERANCE) && v.hours - expectedHours < -8
             ? "short"
-            : v.hours > expectedHours * (1 + HOUR_TOLERANCE)
+            : heavyAbove != null && v.hours > heavyAbove * (1 + HOUR_TOLERANCE) && v.hours - heavyAbove > 8
               ? "over"
               : "ok";
+      if (typicalFinal == null) typicalFinal = finalExpected;
     }
     const gapHours = expectedHours != null ? v.hours - expectedHours : null;
     const r1 = (x: number | null) => (x != null ? Math.round(x * 10) / 10 : null);
@@ -1641,6 +1700,7 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
       benchmark,
       expectedHours: r1(expectedHours),
       gapHours: r1(gapHours),
+      typicalOtHours: r1(avgOf(otByDow, dow)),
       scheduledLaborPct: projectedSales ? v.cost / projectedSales : null,
       status,
       events: dayEvents,
@@ -1667,13 +1727,20 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
   };
 
   const bookedTotal = [...byDept.values()].reduce((s, v) => s + v.hours, 0);
+  // Timesheet-based dept share of a typical week — lean-invariant (the lean
+  // bias cancels in shares), so it works even before curve data exists.
+  const totalTypicalWeekly = [...deptWeekly.keys()].reduce((s, k) => s + (typicalDeptHours(k) ?? 0), 0);
+  const timesheetShareOf = (dept: string): number | null => {
+    const t = typicalDeptHours(dept);
+    return t != null && totalTypicalWeekly > 0 ? t / totalTypicalWeekly : null;
+  };
   const byDepartment: StaffingDept[] = [...byDept.entries()]
     .map(([department, v]) => {
       // Typical FINAL weekly hours: reconstruction when available, else timesheet.
       const typical = typicalDeptFinalOf(department) ?? typicalDeptHours(department);
       const gap = typical != null ? v.hours - typical : null;
       const share = bookedTotal > 0 ? v.hours / bookedTotal : null;
-      const typicalShare = typicalDeptShareOf(department);
+      const typicalShare = typicalDeptShareOf(department) ?? timesheetShareOf(department);
       // Mid-build, absolute hours always trail the final — the dept's SHARE of
       // what's booked so far is the lead-invariant signal.
       const status: StaffingDept["status"] =
@@ -1687,7 +1754,7 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
             ? "unknown"
             : curveBased
               ? "ok" // absolute comparison is unfair mid-build; stay quiet
-              : v.hours < typical * (1 - HOUR_TOLERANCE) - 2
+              : v.hours < typical * leanCalib * (1 - HOUR_TOLERANCE) - 2
                 ? "short"
                 : v.hours > typical * (1 + HOUR_TOLERANCE) + 2
                   ? "over"
@@ -1723,11 +1790,13 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
   if (shortDays.length) {
     const w = shortDays[0];
     callouts.push({
-      severity: "alert",
+      // The fallback benchmark is an estimate — flag it as worth a look, not a
+      // crisis. Only the real build-curve earns "alert".
+      severity: w.benchmark === "curve" ? "alert" : "warn",
       text:
         w.benchmark === "curve"
           ? `${fmtDay(w.date)} is behind pace: ${w.scheduledHours}h booked vs ~${Math.round(w.typicalByNow ?? 0)}h usually by now — ${dowName(w.date)}s typically finish near ${Math.round(w.typicalFinal ?? 0)}h${w.events.length ? `, and ${w.events.length} event${w.events.length > 1 ? "s are" : " is"} booked that day` : ""}.`
-          : `${fmtDay(w.date)} looks understaffed: ${w.scheduledHours}h scheduled vs ~${w.expectedHours}h typical${w.events.length ? ` with ${w.events.length} booked event${w.events.length > 1 ? "s" : ""}` : ""} — add ~${Math.ceil(Math.abs(w.gapHours ?? 0) / 8)} shift${Math.abs(w.gapHours ?? 0) > 8 ? "s" : ""}.`,
+          : `${fmtDay(w.date)} reads light: ${w.scheduledHours}h booked vs ~${Math.round(w.expectedHours ?? 0)}h usually on a ${dowName(w.date)} schedule by now${w.events.length ? ` with ${w.events.length} booked event${w.events.length > 1 ? "s" : ""}` : ""} — worth a look in When I Work.`,
     });
   }
   if (overDays.length) {
@@ -1750,12 +1819,24 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
           : `${worstDept.department} is scheduled ${Math.abs(worstDept.gapHours ?? 0)}h under its recent weekly average (${worstDept.scheduledHours}h vs ~${worstDept.typicalHours}h).`,
     });
   }
+  // Overtime history: where lean scheduling has actually been biting. One
+  // amber line, only when a scheduled weekday routinely absorbs real OT.
+  const otHeavy = days
+    .map((d) => ({ d, ot: avgOf(otByDow, dowOf(d.date)) ?? 0 }))
+    .filter((x) => x.ot >= 8 && x.d.scheduledHours > 0)
+    .sort((a, b) => b.ot - a.ot)[0];
+  if (otHeavy && callouts.length < 2) {
+    callouts.push({
+      severity: "warn",
+      text: `${dowName(otHeavy.d.date)}s have been absorbing ~${Math.round(otHeavy.ot)}h of overtime — the lean schedule gets covered after the fact; planned hours there would be cheaper.`,
+    });
+  }
   if (!callouts.length) {
     callouts.push({
       severity: "ok",
       text: curveBased
         ? `Schedule build is on pace — ${Math.round(totalsHours)}h booked${typicalByNowWeek != null ? ` vs ~${Math.round(typicalByNowWeek)}h usual by now` : ""}${typicalFinalWeek != null ? `, weeks typically finish near ${Math.round(typicalFinalWeek)}h` : ""}.`
-        : `Schedule tracks recent staffing levels — ${Math.round(totalsHours)}h across ${headcount} people.`,
+        : `Schedule reads normal for this operation — ${Math.round(totalsHours)}h across ${headcount} people. Schedules here typically run ~${Math.round((1 - leanCalib) * 100)}% under worked hours and fill in as the week runs.`,
     });
   }
 

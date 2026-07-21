@@ -56,7 +56,7 @@ export function StaffingCallout({ so }: { so: StaffingOutlook }) {
                   title={
                     d.benchmark === "curve"
                       ? `${shortDate(d.date)} · ${d.scheduledHours}h booked vs ~${Math.round(d.typicalByNow ?? 0)}h usual by now${d.typicalFinal != null ? ` · typically ends ~${Math.round(d.typicalFinal)}h` : ""}`
-                      : `${shortDate(d.date)} · ${d.scheduledHours}h scheduled${d.expectedHours != null ? ` vs ~${d.expectedHours}h typical` : ""}`
+                      : `${shortDate(d.date)} · ${d.scheduledHours}h booked${d.expectedHours != null ? ` vs ~${Math.round(d.expectedHours)}h usual by now (est.)` : ""}${d.typicalFinal != null ? ` · est. finishes ~${Math.round(d.typicalFinal)}h` : ""}${d.typicalOtHours != null && d.typicalOtHours >= 8 ? ` · ~${Math.round(d.typicalOtHours)}h OT historically` : ""}`
                   }
                   className={cn("grid w-9 place-items-center rounded-lg border py-1 text-center", CHIP[d.status])}
                 >

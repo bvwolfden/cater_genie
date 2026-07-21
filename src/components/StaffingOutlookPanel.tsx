@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { CalendarClock, UploadCloud } from "lucide-react";
 
 const MODEL_NOTE =
-  "modeled demand — “typical” staffing is the last 4 weeks of actuals scaled for booked events; real bookings/schedule data will replace this";
+  "modeled demand — “usual by now” is the last 4 weeks of worked hours, calibrated for this operation's lean scheduling (~30% under worked), a capped booked-event uplift, and how late the week's schedule usually gets built; the When I Work audit log replaces this once imported";
 const PILL: Record<string, string> = {
   short: "bg-rose/10 text-rose",
   over: "bg-amber/10 text-amber",
@@ -19,7 +19,7 @@ function statusLabel(status: string, benchmark: string): string {
   if (benchmark === "curve") {
     return status === "short" ? "behind" : status === "over" ? "heavy" : status === "ok" ? "on pace" : "no baseline";
   }
-  return status === "short" ? "short" : status === "over" ? "over" : status === "ok" ? "ok" : "no baseline";
+  return status === "short" ? "light" : status === "over" ? "heavy" : status === "ok" ? "ok" : "no baseline";
 }
 
 function gapText(gap: number | null): { text: string; cls: string } {
@@ -89,7 +89,7 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
         subtitle={
           curve
             ? `Schedule build pace vs history — hours usually booked by ${so.asOf ? shortDate(so.asOf) : "now"} for each weekday, from the When I Work audit log`
-            : "When I Work schedule vs typical staffing for each weekday (last 4 weeks of actuals, scaled for booked events)"
+            : "When I Work schedule vs how this operation actually staffs — worked-hours history calibrated for lean scheduling and the late build"
         }
         right={curve ? undefined : <EstBadge note={MODEL_NOTE} />}
       />
@@ -192,9 +192,9 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
               <th className="px-2 py-1.5 text-right font-medium">Booked</th>
               <th className="px-2 py-1.5 text-right font-medium">
                 <span className="inline-flex items-center gap-1">
-                  {curve ? "Usual by now" : "Typical"}
+                  Usual by now
                   <Explain
-                    title={curve ? "Usual by now — the schedule build curve" : "Typical hours — how each day's baseline is built"}
+                    title={curve ? "Usual by now — the schedule build curve" : "Usual by now — how each day's baseline is built"}
                     steps={
                       curve
                         ? [
@@ -220,12 +220,19 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
                               detail: "Average worked hours for that weekday over the last 4 weeks of actual timesheets — last month's Mondays predict next Monday.",
                             },
                             {
-                              label: "Scale for bookings",
-                              detail: "If booked events push a day's projected sales above its norm, typical hours scale up by the same ratio (capped at 2×).",
+                              label: "Lean-schedule calibration",
+                              detail:
+                                "Schedules here run ~30% under what actually gets worked — shifts get added and extended in real time. The benchmark is scaled down to what a schedule (not a timesheet) should hold, so running lean doesn't read as a crisis.",
+                            },
+                            {
+                              label: "Bookings and build timing",
+                              detail:
+                                "Booked events add a capped uplift (the weekday norm already includes the usual event mix), and days still far out get a build allowance — most of each week's hours are added in the final days.",
                             },
                             {
                               label: "Gap and status",
-                              detail: "Gap = scheduled − typical. A day flags SHORT or OVER when the schedule misses typical by more than the tolerance band.",
+                              detail:
+                                "Gap = booked − usual-by-now. LIGHT means well under even the lean, build-adjusted expectation; HEAVY means above what's typically worked outright.",
                             },
                           ]
                     }
@@ -233,7 +240,7 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
                 </span>
               </th>
               <th className="px-2 py-1.5 text-right font-medium">Gap</th>
-              {curve && <th className="px-2 py-1.5 text-right font-medium">Ends ~</th>}
+              <th className="px-2 py-1.5 text-right font-medium">Ends ~</th>
               <th className="px-2 py-1.5 text-right font-medium">Staff</th>
               <th className="px-2 py-1.5 text-right font-medium">Labor $</th>
               <th className="px-2 py-1.5 text-right font-medium">
@@ -282,11 +289,9 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
                         : "—"}
                   </td>
                   <td className={cn("px-2 py-1.5 text-right tabular-nums font-medium", gap.cls)}>{gap.text}</td>
-                  {curve && (
-                    <td className="px-2 py-1.5 text-right tabular-nums text-ink-3">
-                      {d.typicalFinal != null ? `${Math.round(d.typicalFinal)}h` : "—"}
-                    </td>
-                  )}
+                  <td className="px-2 py-1.5 text-right tabular-nums text-ink-3">
+                    {d.typicalFinal != null ? `${Math.round(d.typicalFinal)}h` : "—"}
+                  </td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{d.headcount || "—"}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{money(d.scheduledCost)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{money(d.projectedSales)}</td>
@@ -361,8 +366,11 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
           </>
         ) : (
           <>
-            &ldquo;typical&rdquo; is the average for that weekday (or department-week) over the last 4 weeks of actuals, scaled
-            up when booked events add volume. Short days need shifts added in When I Work; over days are trimmable labor.
+            This operation schedules lean on purpose — schedules run ~30% under worked hours and most of the week&apos;s
+            shifts get added in the final days, so the benchmark is calibrated for both before any day gets flagged.{" "}
+            <span className="font-medium text-ink-2">Light</span> means well under even that lean, build-adjusted
+            expectation; <span className="font-medium text-ink-2">heavy</span> means above what&apos;s typically worked
+            outright. Weekdays that historically absorb overtime are called out — planned hours are cheaper than OT.
           </>
         )}{" "}
         Imported from When I Work exports — automated sync arrives with API credentials.
