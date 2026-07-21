@@ -1,6 +1,6 @@
 import type { Dashboard } from "@/lib/dashboard";
 import { money, percent, hours, laborHealth, deltaPct } from "@/lib/format";
-import { Card, Delta, Sparkline } from "./primitives";
+import { Card, CoverageDot, Delta, Sparkline } from "./primitives";
 import { cn } from "@/lib/cn";
 import { DollarSign, Users, Banknote, CalendarRange, Utensils, Clock } from "lucide-react";
 
@@ -15,6 +15,7 @@ function StatCard({
   spark,
   sparkColor = "#FF385C",
   sparkCaption,
+  badge,
 }: {
   label: string;
   value: string;
@@ -26,11 +27,13 @@ function StatCard({
   spark: number[];
   sparkColor?: string;
   sparkCaption: string;
+  badge?: React.ReactNode;
 }) {
   return (
     <Card className="card-pad animate-fade-up overflow-hidden">
       <div className="flex items-center justify-between gap-1">
         <span className="stat-label min-w-0 flex-1 truncate">{label}</span>
+        {badge}
         <span className="shrink-0 text-ink-3">{icon}</span>
       </div>
       <div className={cn("mt-2 text-2xl font-semibold tracking-tight tabular-nums", accent)}>{value}</div>
@@ -65,6 +68,7 @@ export function Kpis({ data }: { data: Dashboard }) {
         spark={w.spark.net}
         sparkColor="#FF385C"
         sparkCaption={sparkCaption}
+        badge={<CoverageDot daysWithData={w.coverage.daysWithData} daysExpected={w.coverage.daysExpected} />}
       />
 
       <StatCard

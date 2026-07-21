@@ -1,9 +1,12 @@
 import Link from "next/link";
 import type { StaffingOutlook } from "@/lib/dashboard";
 import { money, percent, shortDate, weekdayDate } from "@/lib/format";
-import { Card, SectionHeader } from "./primitives";
+import { Card, EstBadge, SectionHeader } from "./primitives";
 import { cn } from "@/lib/cn";
 import { CalendarClock, UploadCloud } from "lucide-react";
+
+const MODEL_NOTE =
+  "modeled demand — “typical” staffing is the last 4 weeks of actuals scaled for booked events; real bookings/schedule data will replace this";
 
 const PILL: Record<string, string> = {
   short: "bg-rose/10 text-rose",
@@ -67,6 +70,7 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
           </span>
         }
         subtitle="When I Work schedule vs typical staffing for each weekday (last 4 weeks of actuals, scaled for booked events)"
+        right={<EstBadge note={MODEL_NOTE} />}
       />
 
       {/* Week totals */}
@@ -82,12 +86,18 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
           <div className="mt-0.5 text-[11px] text-ink-3">hours × scheduled rate</div>
         </div>
         <div className="rounded-xl border border-line bg-canvas-700 px-4 py-3">
-          <div className="stat-label">Projected Sales</div>
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="stat-label">Projected Sales</span>
+            <EstBadge note={MODEL_NOTE} />
+          </div>
           <div className="mt-1 text-xl font-semibold tabular-nums text-ink">{money(t.projectedSales)}</div>
           <div className="mt-0.5 text-[11px] text-ink-3">weekday norms + bookings</div>
         </div>
         <div className="rounded-xl border border-line bg-canvas-700 px-4 py-3">
-          <div className="stat-label">Implied Labor %</div>
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="stat-label">Implied Labor %</span>
+            <EstBadge note="scheduled labor $ over modeled projected sales" />
+          </div>
           <div
             className={cn(
               "mt-1 text-xl font-semibold tabular-nums",
@@ -139,7 +149,10 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{money(d.projectedSales)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{percent(d.scheduledLaborPct)}</td>
                   <td className="px-2 py-1.5 text-right">
-                    <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>{STATUS_LABEL[d.status]}</span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>{STATUS_LABEL[d.status]}</span>
+                      <EstBadge note={MODEL_NOTE} />
+                    </span>
                   </td>
                 </tr>
               );
@@ -158,7 +171,10 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
               <div key={d.department} className="rounded-xl border border-line bg-canvas-700 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-ink">{d.department}</span>
-                  <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>{STATUS_LABEL[d.status]}</span>
+                  <span className="flex items-center gap-1">
+                    <EstBadge note={MODEL_NOTE} />
+                    <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>{STATUS_LABEL[d.status]}</span>
+                  </span>
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
                   <span>Scheduled <b className="tabular-nums text-ink">{Math.round(d.scheduledHours)}h</b></span>

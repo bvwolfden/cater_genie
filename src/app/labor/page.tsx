@@ -8,7 +8,7 @@ import { ComparisonPanels } from "@/components/Comparisons";
 import { StaffingOutlookPanel } from "@/components/StaffingOutlookPanel";
 import { EmployeeAnomalies } from "@/components/EmployeeAnomalies";
 import { LaborTrendChart } from "@/components/charts";
-import { Card, SectionHeader, ChartLegend, Sparkline, Delta } from "@/components/primitives";
+import { Card, SectionHeader, ChartLegend, Sparkline, Delta, ProjBadge } from "@/components/primitives";
 import { money, percent, hours, shortDate, deltaPct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -23,6 +23,7 @@ function LaborStat({
   prior,
   spark,
   sub,
+  badge,
 }: {
   label: string;
   value: string;
@@ -32,10 +33,14 @@ function LaborStat({
   prior?: string;
   spark?: number[];
   sub?: string;
+  badge?: React.ReactNode;
 }) {
   return (
     <Card className="card-pad overflow-hidden">
-      <div className="stat-label">{label}</div>
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <span className="stat-label">{label}</span>
+        {badge}
+      </div>
       <div className={cn("mt-1.5 text-2xl font-semibold tabular-nums", accent)}>{value}</div>
       <div className="mt-1.5 flex items-center gap-1.5">
         {deltaValue != null ? <Delta value={deltaValue} upIsGood={false} /> : null}
@@ -98,6 +103,7 @@ export default async function LaborPage({
           value={money(a.projectedYearEndLabor)}
           accent="text-ink-2"
           sub={`modeled · from ${money(a.ytdLabor)} YTD`}
+          badge={<ProjBadge />}
         />
       </div>
       <p className="mt-2 text-[11px] text-ink-3">

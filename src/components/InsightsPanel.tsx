@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Sparkles, RefreshCw, AlertTriangle, Info, OctagonAlert, Target } from "lucide-react";
+import { ProjBadge } from "./primitives";
 import { cn } from "@/lib/cn";
 
 type Alert = { severity: "info" | "warn" | "alert"; title: string; detail: string };
@@ -123,6 +124,7 @@ export function InsightsPanel({ initial }: { initial: Insight }) {
               <span className="text-xs font-semibold text-ink">
                 Forecast · {shortDate(insight.forecast.targetDate)}
               </span>
+              <ProjBadge />
               {fc.accChip && (
                 <span className="ml-auto rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-medium text-ink-2">
                   {fc.accChip}
