@@ -9,9 +9,13 @@ import { Nav } from "@/components/Nav";
 import { Card, SectionHeader } from "@/components/primitives";
 import { Explain } from "@/components/Explain";
 import { AssignPicker } from "@/components/delivery/AssignPicker";
+import { PencilTag } from "@/components/delivery/PencilTag";
 import { MapPanel } from "@/components/delivery/MapPanel";
 import type { MapLane, MapStop } from "@/components/delivery/DeliveryMapInner";
 import { cn } from "@/lib/cn";
+import { CanvasGrid, type CanvasSlot } from "@/components/canvas/CanvasGrid";
+import { DELIVERY_CARDS } from "@/lib/canvas/registry";
+import { getUserLayout } from "@/lib/layout";
 import { Truck, TriangleAlert, MapPin, UploadCloud } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +40,10 @@ function StopRow({
       </span>
       <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tone ?? "#A6A6A6" }} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-ink">{s.company ?? s.building ?? `Order #${s.orderId}`}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium text-ink">{s.company ?? s.building ?? `Order #${s.orderId}`}</span>
+          {s.penciled && <PencilTag orderId={s.orderId} />}
+        </div>
         <div className="truncate text-[11px] text-ink-3">
           {s.building && s.building !== s.company ? `${s.building} · ` : ""}
           {s.address ?? "no address yet"}
@@ -54,7 +61,12 @@ function StopRow({
 
 export default async function DeliveryPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const sp = await searchParams;
-  const [dates, customers, roster] = await Promise.all([getDeliveryDates(14), getKnownCustomers(), getDriverRoster()]);
+  const [dates, customers, roster, layout] = await Promise.all([
+    getDeliveryDates(14),
+    getKnownCustomers(),
+    getDriverRoster(),
+    getUserLayout("delivery"),
+  ]);
   const fallback = dates.find((d) => d.drops > 0)?.date ?? todayISO();
   const dateISO = sp.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : fallback;
   const day = await getDeliveryDay(dateISO);
@@ -84,13 +96,9 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
     }))
     .filter((l) => l.path.length > 1);
 
-  return (
-    <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
-      <Nav />
-      <Header />
-
-      {/* Day selector */}
-      <div className="mb-4 flex flex-wrap gap-1.5">
+  // Day selector — navigation, not a card: every card depends on ?date=.
+  const daySelector = (
+    <div className="mb-4 flex flex-wrap gap-1.5">
         {dates.map((d) => {
           const active = d.date === dateISO;
           return (
@@ -111,10 +119,14 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
           );
         })}
         {dates.length === 0 && <p className="text-sm text-ink-3">No upcoming CaterTrax orders synced yet.</p>}
-      </div>
+    </div>
+  );
 
-      {/* The phone-call flow: what windows can we offer? */}
-      <Card className="card-pad mb-4">
+  // One renderer per registered card (ids in @/lib/canvas/registry).
+  const renderers: Record<string, React.ReactNode | null> = {
+    // The phone-call flow: what windows can we offer?
+    "slot-finder": (
+      <Card className="card-pad">
         <SectionHeader
           title={`Can we take a delivery on ${weekdayDate(dateISO)}?`}
           subtitle="Checks driver shifts, existing drops, unload time and drive time — every verdict says why"
@@ -137,10 +149,11 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
           dayDriverKeys={day.lanes.map((l) => l.key)}
         />
       </Card>
-
-      {/* Conflicts — what a scheduler would actually act on */}
-      {day.conflicts.length > 0 && (
-        <Card className="card-pad mb-4">
+    ),
+    // Conflicts — what a scheduler would actually act on. null when clean:
+    // the card stays in the layout and reappears when flags exist.
+    "needs-attention": day.conflicts.length === 0 ? null : (
+      <Card className="card-pad">
           <SectionHeader
             title={
               <span className="flex items-center gap-2">
@@ -158,11 +171,10 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
               </li>
             ))}
           </ul>
-        </Card>
-      )}
-
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-      <Card className="card-pad xl:col-span-3">
+      </Card>
+    ),
+    "delivery-board": (
+      <Card className="card-pad">
         <SectionHeader
           title={
             <span className="flex items-center gap-2">
@@ -244,9 +256,10 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
             : ""}
         </p>
       </Card>
-
-      {/* Map — pins colored by driver, gray = unassigned, dashed lines = run order */}
-      <Card className="card-pad xl:col-span-2">
+    ),
+    // Map — pins colored by driver, gray = unassigned, dashed lines = run order
+    "delivery-map": (
+      <Card className="card-pad">
         <SectionHeader
           title="Map"
           subtitle="Pins colored by driver (gray = unassigned) · dashed line = run order from the depot"
@@ -266,7 +279,16 @@ export default async function DeliveryPage({ searchParams }: { searchParams: Pro
           </div>
         )}
       </Card>
-      </div>
+    ),
+  };
+  const slots: CanvasSlot[] = DELIVERY_CARDS.map((m) => ({ id: m.id, element: renderers[m.id] ?? null }));
+
+  return (
+    <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
+      <Nav />
+      <Header />
+      {daySelector}
+      <CanvasGrid tab="delivery" layout={layout} slots={slots} />
     </main>
   );
 }
