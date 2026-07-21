@@ -25,10 +25,12 @@ function Stat({ label, value, sub, icon }: { label: string; value: string; sub?:
 
 function statusTone(status: string | null): string {
   const s = (status ?? "").toLowerCase();
-  if (s.includes("confirm") && !s.includes("pending")) return "bg-mint/10 text-mint";
-  if (s.includes("complete")) return "bg-mint/10 text-mint";
-  if (s.includes("definite")) return "bg-mint/10 text-mint";
-  if (s.includes("pending") || s.includes("tentative") || s.includes("change")) return "bg-amber/10 text-amber";
+  // Severity first: "incomplete" contains "complete" and "confirmation
+  // pending" contains "confirm" — a green match must never win over those.
+  if (s.includes("cancel")) return "bg-rose/10 text-rose";
+  if (s.includes("incomplete") || s.includes("pending") || s.includes("tentative") || s.includes("change") || s.includes("prospect"))
+    return "bg-amber/10 text-amber";
+  if (s.includes("confirm") || s.includes("complete") || s.includes("definite")) return "bg-mint/10 text-mint";
   return "bg-canvas-700 text-ink-2";
 }
 
