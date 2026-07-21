@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { StaffingOutlook } from "@/lib/dashboard";
 import { money, percent, shortDate, weekdayDate } from "@/lib/format";
 import { Card, EstBadge, SectionHeader } from "./primitives";
+import { Explain } from "./Explain";
 import { cn } from "@/lib/cn";
 import { CalendarClock, UploadCloud } from "lucide-react";
 
@@ -58,6 +59,13 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
   }
 
   const t = so.totals;
+  // Derivation inputs: booked-event revenue is carried per day; the weekday
+  // norm is whatever remains of each day's projection.
+  const eventRevTotal = so.days.reduce((s, d) => s + d.events.reduce((x, e) => x + (e.revenue ?? 0), 0), 0);
+  const eventCount = so.days.reduce((s, d) => s + d.events.length, 0);
+  const normTotal = (t.projectedSales ?? 0) - eventRevTotal;
+  const sample = so.days.find((d) => d.projectedSales != null && d.events.length > 0) ?? so.days.find((d) => d.projectedSales != null);
+  const sampleEventRev = sample ? sample.events.reduce((x, e) => x + (e.revenue ?? 0), 0) : 0;
   return (
     <Card className="card-pad">
       <SectionHeader
@@ -89,6 +97,31 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
             <span className="stat-label">Projected Sales</span>
             <EstBadge note={MODEL_NOTE} />
+            <Explain
+              title={`Projected sales ${money(t.projectedSales)} — how it's built`}
+              steps={[
+                {
+                  label: "Weekday norms",
+                  detail: `Each day starts from the average for that weekday over the last 4 weeks of actual sales — about ${money(normTotal)} across this week. A typical Tuesday predicts next Tuesday.`,
+                },
+                {
+                  label: "Add booked events",
+                  detail: `${eventCount} booked event${eventCount === 1 ? "" : "s"} (Caterease/CaterTrax orders already on the calendar) add ${money(eventRevTotal)} on top of the norms on the days they land.`,
+                },
+                ...(sample
+                  ? [
+                      {
+                        label: `Example — ${weekdayDate(sample.date)}`,
+                        detail:
+                          sample.events.length > 0
+                            ? `${money((sample.projectedSales ?? 0) - sampleEventRev)} typical for this weekday + ${money(sampleEventRev)} from ${sample.events.length} booked event${sample.events.length === 1 ? "" : "s"} = ${money(sample.projectedSales)}.`
+                            : `no events booked, so the day is just its weekday norm: ${money(sample.projectedSales)}.`,
+                      },
+                    ]
+                  : []),
+              ]}
+              note="Bookings are real orders, not modeled. The weekday-norm half is an estimate — it can't see walk-in swings or holidays yet."
+            />
           </div>
           <div className="mt-1 text-xl font-semibold tabular-nums text-ink">{money(t.projectedSales)}</div>
           <div className="mt-0.5 text-[11px] text-ink-3">weekday norms + bookings</div>
@@ -97,6 +130,27 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
             <span className="stat-label">Implied Labor %</span>
             <EstBadge note="scheduled labor $ over modeled projected sales" />
+            <Explain
+              title={`Implied labor ${percent(t.scheduledLaborPct)} — how it's built`}
+              steps={[
+                {
+                  label: "Scheduled labor $",
+                  detail: `${money(t.scheduledCost)} — every When I Work shift this week, hours × that person's scheduled rate. This half is real (it's the schedule), not modeled.`,
+                },
+                {
+                  label: "Divide by projected sales",
+                  detail: `${money(t.scheduledCost)} ÷ ${money(t.projectedSales)} projected sales = ${percent(t.scheduledLaborPct)}. The projection is the modeled part — weekday norms plus booked events (see the Projected Sales note).`,
+                },
+                {
+                  label: "Compare to reality",
+                  detail:
+                    t.benchmarkLaborPct != null
+                      ? `Recent weeks actually ran ${percent(t.benchmarkLaborPct)} labor. If implied is far below recent actual, the schedule is probably missing shifts (or sales are over-projected) — not evidence of sudden efficiency.`
+                      : "No recent actual benchmark is available to compare against.",
+                },
+              ]}
+              note="Scheduled-rate wages run lower than the comp sheet's loaded payroll cost (taxes, wellness, draws), so don't compare this % directly against the payroll cards above."
+            />
           </div>
           <div
             className={cn(
@@ -119,11 +173,49 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
             <tr className="border-b border-line text-left text-[10px] uppercase tracking-wide text-ink-3">
               <th className="px-2 py-1.5 font-medium">Day</th>
               <th className="px-2 py-1.5 text-right font-medium">Scheduled</th>
-              <th className="px-2 py-1.5 text-right font-medium">Typical</th>
+              <th className="px-2 py-1.5 text-right font-medium">
+                <span className="inline-flex items-center gap-1">
+                  Typical
+                  <Explain
+                    title="Typical hours — how each day's baseline is built"
+                    steps={[
+                      {
+                        label: "Weekday average",
+                        detail: "Average worked hours for that weekday over the last 4 weeks of actual timesheets — last month's Mondays predict next Monday.",
+                      },
+                      {
+                        label: "Scale for bookings",
+                        detail: "If booked events push a day's projected sales above its norm, typical hours scale up by the same ratio (capped at 2×). A day with a big wedding expects more hands than a bare Tuesday.",
+                      },
+                      {
+                        label: "Gap and status",
+                        detail: "Gap = scheduled − typical. A day flags SHORT or OVER when the schedule misses typical by more than the tolerance band; small gaps stay OK.",
+                      },
+                    ]}
+                  />
+                </span>
+              </th>
               <th className="px-2 py-1.5 text-right font-medium">Gap</th>
               <th className="px-2 py-1.5 text-right font-medium">Staff</th>
               <th className="px-2 py-1.5 text-right font-medium">Labor $</th>
-              <th className="px-2 py-1.5 text-right font-medium">Proj. Sales</th>
+              <th className="px-2 py-1.5 text-right font-medium">
+                <span className="inline-flex items-center gap-1">
+                  Proj. Sales
+                  <Explain
+                    title="Projected sales per day — how it's built"
+                    steps={[
+                      {
+                        label: "Weekday norm",
+                        detail: "Average net sales for that weekday over the last 4 weeks of actuals.",
+                      },
+                      {
+                        label: "Plus booked events",
+                        detail: "Days tagged with an EVENTS pill add the actual dollar value of Caterease/CaterTrax orders already booked for that date — those dollars are real commitments, not modeled.",
+                      },
+                    ]}
+                  />
+                </span>
+              </th>
               <th className="px-2 py-1.5 text-right font-medium">Labor %</th>
               <th className="px-2 py-1.5 text-right font-medium">Status</th>
             </tr>

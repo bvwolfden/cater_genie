@@ -2,6 +2,7 @@ import type { Pulse as PulseData } from "@/lib/dashboard";
 import { money, percent } from "@/lib/format";
 import { OPEX_PCT, FIXED_WEEKLY } from "@/lib/costModel";
 import { Card, SectionHeader, ChartLegend, EstBadge, ProjBadge } from "./primitives";
+import { Explain } from "./Explain";
 import { PulseChart } from "./PulseChart";
 import { Activity } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -84,6 +85,24 @@ export function Pulse({ pulse }: { pulse: PulseData }) {
             <>
               <ProjBadge />
               <EstBadge note={`seasonal projection; includes stubbed ${percent(OPEX_PCT, 0)} opex + ${money(FIXED_WEEKLY)}/wk fixed (debt + interest)`} />
+              <Explain
+                title={`Year-end net profit ${money(eoy.profit)} — how it's built`}
+                steps={[
+                  {
+                    label: "Project revenue to year-end",
+                    detail: `Remaining weeks follow 2025's weekly pattern scaled to 2026's pace (${percent(a.yoyGrowthPct, 1)} YoY) — seasonality included, landing at ${money(eoy.revenue)} for the year.`,
+                  },
+                  {
+                    label: "Model the costs",
+                    detail: `Labor at ${percent(a.laborPct)} and food at ${percent(a.foodPct)} of revenue (rates fit to this year's actual weeks), used directly for projected weeks and to fill the ${a.imputedLaborWeeks + a.imputedFoodWeeks > 0 ? `${a.imputedLaborWeeks} labor / ${a.imputedFoodWeeks} food` : "few"} historical weeks missing actuals.`,
+                  },
+                  {
+                    label: "Subtract overhead — the weakest link",
+                    detail: `Opex is a stub at ${percent(OPEX_PCT, 0)} of revenue plus ${money(FIXED_WEEKLY)}/week fixed (debt + interest) — placeholder rates, not accounting data. Net profit inherits their error; treat the trend as more trustworthy than the level.`,
+                  },
+                ]}
+                note="QuickBooks P&L integration will replace the stubbed overhead with real numbers."
+              />
             </>
           }
         />

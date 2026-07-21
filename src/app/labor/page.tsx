@@ -9,6 +9,7 @@ import { StaffingOutlookPanel } from "@/components/StaffingOutlookPanel";
 import { EmployeeAnomalies } from "@/components/EmployeeAnomalies";
 import { LaborTrendChart } from "@/components/charts";
 import { Card, SectionHeader, ChartLegend, Sparkline, Delta, ProjBadge } from "@/components/primitives";
+import { Explain } from "@/components/Explain";
 import { money, percent, hours, shortDate, deltaPct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -74,6 +75,36 @@ export default async function LaborPage({
   const boundary = a.weekly.filter((w) => w.actualLabor != null).slice(-1)[0]?.week ?? null;
   const rangeLabel = a.range.from && a.range.to ? `${shortDate(a.range.from)} – ${shortDate(a.range.to)}` : "period";
 
+  // Derivation facts for the year-end projection popover.
+  const projWeeks = a.weekly.filter((w) => w.actualLabor == null && w.projLabor != null);
+  const projRest = projWeeks.reduce((s, w) => s + (w.projLabor ?? 0), 0);
+  const peakWeek = [...projWeeks].sort((x, y) => (y.projLabor ?? 0) - (x.projLabor ?? 0))[0];
+  const m = a.assumptions;
+  const projExplain = (
+    <Explain
+      title={`Year-end payroll ${money(a.projectedYearEndLabor)} — how it's built`}
+      steps={[
+        {
+          label: "Start from actuals",
+          detail: `${money(a.ytdLabor)} of payroll is on the books through the week of ${boundary ? shortDate(boundary) : "—"} (weekly comp sheet).`,
+        },
+        {
+          label: "Project each remaining week's revenue",
+          detail: `Take what the same week did last year and scale by this year's pace: 2026 is running ${m.yoyRevenuePace.toFixed(2)}× 2025 on matched weeks. This keeps the real seasonality — the Sep–Oct event peak, the early-December holiday-party spike, the dead week after Christmas. Weeks whose revenue is already recorded use the actual number.`,
+        },
+        {
+          label: "Turn revenue into labor",
+          detail: `Every week carries about ${money(m.fixedWeeklyLabor)} of fixed labor (the crew you staff no matter what) plus ${(m.variableLaborPct * 100).toFixed(1)}¢ per revenue dollar — both fit to 2026's own weeks. That's why slow weeks don't drop to zero and big weeks don't scale linearly.`,
+        },
+        {
+          label: "Add it up",
+          detail: `${projWeeks.length} remaining weeks total ${money(projRest)} projected${peakWeek ? ` (largest: ${money(peakWeek.projLabor)} the week of ${shortDate(peakWeek.week)})` : ""}, plus ${money(a.ytdLabor)} actual = ${money(a.projectedYearEndLabor)}.`,
+        },
+      ]}
+      note="Hover any dotted week on the trend chart below for that week's specific math. Seasonality assumptions are documented in docs/seasonality-research.md."
+    />
+  );
+
   return (
     <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
       <Nav />
@@ -103,7 +134,12 @@ export default async function LaborPage({
           value={money(a.projectedYearEndLabor)}
           accent="text-ink-2"
           sub={`seasonal model · from ${money(a.ytdLabor)} YTD`}
-          badge={<ProjBadge />}
+          badge={
+            <>
+              <ProjBadge />
+              {projExplain}
+            </>
+          }
         />
       </div>
       <p className="mt-2 text-[11px] text-ink-3">
@@ -124,7 +160,7 @@ export default async function LaborPage({
               subtitle="Weekly labor — actual to date; projection = prior-year seasonality × 2026 pace"
               right={<ChartLegend items={[{ color: "#FFB400", label: "Labor" }]} note="solid = actual, dotted = projected" />}
             />
-            <LaborTrendChart weekly={a.weekly} boundary={boundary} />
+            <LaborTrendChart weekly={a.weekly} boundary={boundary} model={a.assumptions} />
           </Card>
 
           <Card className="card-pad">

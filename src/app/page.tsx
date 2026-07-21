@@ -16,6 +16,7 @@ import { Comparisons } from "@/components/Comparisons";
 import { Pulse } from "@/components/Pulse";
 import { InsightsPanel } from "@/components/InsightsPanel";
 import { Card, SectionHeader, ChartLegend, ProjBadge } from "@/components/primitives";
+import { Explain } from "@/components/Explain";
 import { money, percent, shortDate } from "@/lib/format";
 import {
   SalesTrendChart,
@@ -131,6 +132,26 @@ export default async function Page({
                     ]}
                   />
                   <ProjBadge />
+                  {data.weeklyProjection && (
+                    <Explain
+                      title="Projected weeks — how they're built"
+                      steps={[
+                        {
+                          label: "Prior-year seasonality",
+                          detail: "Each dashed future week starts from what the same calendar week did in 2025 — that's where holiday spikes and slow weeks come from.",
+                        },
+                        {
+                          label: "Scale to this year's pace",
+                          detail: `2026 is running ${data.weeklyProjection.pace.toFixed(2)}× the 2025 number over the last ${data.weeklyProjection.paceWeeks} matched weeks, so each prior-year week is multiplied by ${data.weeklyProjection.pace.toFixed(2)}.`,
+                        },
+                        {
+                          label: "Fallback",
+                          detail: `A future week with no 2025 data uses the recent run-rate instead (${money(data.weeklyProjection.runRate)}/week, the average of the last 4 actual weeks).`,
+                        },
+                      ]}
+                      note="Only the next 4 weeks are shown — beyond that, confidence drops until real bookings cover the horizon."
+                    />
+                  )}
                 </div>
               }
             />
