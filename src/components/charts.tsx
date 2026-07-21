@@ -24,20 +24,6 @@ const CORAL = "#FF385C";
 const TEAL = "#00A699";
 const GOLD = "#FFB400";
 
-// Renders a series name at the far-right (last) point of a line/area.
-const endLabel = (text: string, color: string, lastIndex: number) =>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function EndLabel(props: any) {
-    if (props.index !== lastIndex) return null;
-    const x = Number(props.x), y = Number(props.y);
-    if (!isFinite(x) || !isFinite(y)) return null;
-    return (
-      <text x={x + 6} y={y} fill={color} fontSize={11} fontWeight={600} dominantBaseline="middle">
-        {text}
-      </text>
-    );
-  };
-
 function Box({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-line bg-white px-3 py-2 text-xs shadow-card">
@@ -78,10 +64,10 @@ export function SalesTrendChart({
       i = j + 1;
     } else i++;
   }
-  const last = data.length - 1;
+  const hasNegative = data.some((d) => (d.grossMargin ?? 0) < 0);
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <ComposedChart data={data} margin={{ top: 8, right: 72, bottom: 0, left: 0 }}>
+      <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
         <defs>
           <linearGradient id="netFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={CORAL} stopOpacity={0.28} />
@@ -94,6 +80,7 @@ export function SalesTrendChart({
         <CartesianGrid stroke={GRID} vertical={false} />
         <XAxis dataKey="date" tickFormatter={(d) => shortDate(d)} tick={AXIS} tickLine={false} axisLine={false} minTickGap={24} />
         <YAxis tickFormatter={(v) => moneyCompact(v)} tick={AXIS} tickLine={false} axisLine={false} width={52} />
+        {hasNegative && <ReferenceLine y={0} stroke="#C2C2C2" strokeWidth={1} />}
         <Tooltip
           cursor={{ stroke: "#DDDDDD" }}
           content={({ active, payload, label }) =>
@@ -108,15 +95,13 @@ export function SalesTrendChart({
             ) : null
           }
         />
-        <Area type="monotone" dataKey="netSales" stroke={CORAL} strokeWidth={2.25} fill="url(#netFill)" isAnimationActive={false}>
-          <LabelList content={endLabel("Net sales", CORAL, last)} />
-        </Area>
-        <Line type="monotone" dataKey="laborCost" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false}>
-          <LabelList content={endLabel("Labor", GOLD, last)} />
-        </Line>
-        <Line type="monotone" dataKey="grossMargin" stroke={TEAL} strokeWidth={2} dot={false} isAnimationActive={false}>
-          <LabelList content={endLabel("Gross margin", TEAL, last)} />
-        </Line>
+        {/* Identity lives in the legend above the chart — end-of-line labels
+            collide and clip when the last day's values converge. */}
+        <Area type="monotone" dataKey="netSales" stroke={CORAL} strokeWidth={2.25} fill="url(#netFill)" isAnimationActive={false} />
+        <Line type="monotone" dataKey="laborCost" stroke={GOLD} strokeWidth={2} dot={false} isAnimationActive={false} />
+        {/* connectNulls: margin needs labor AND food on the day; gaps otherwise
+            shatter the line into confusing fragments. */}
+        <Line type="monotone" dataKey="grossMargin" stroke={TEAL} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
