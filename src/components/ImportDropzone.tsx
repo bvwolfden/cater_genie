@@ -187,11 +187,11 @@ export function ImportDropzone() {
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"recent" | "archive">("recent");
+  const [tab, setTab] = useState<"recent" | "committed" | "archive">("recent");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch(`/api/import${tab === "archive" ? "?archived=1" : ""}`);
+    const res = await fetch(`/api/import?tab=${tab}`);
     if (res.ok) setBatches((await res.json()).batches);
   }, [tab]);
 
@@ -281,7 +281,7 @@ export function ImportDropzone() {
       {error && <p className="text-xs text-rose">{error}</p>}
 
       <div className="flex gap-1">
-        {(["recent", "archive"] as const).map((t) => (
+        {(["recent", "committed", "archive"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -299,7 +299,9 @@ export function ImportDropzone() {
         <BatchCard key={b.id} batch={b} onAction={onAction} busy={busy} />
       ))}
       {!batches.length && (
-        <p className="text-center text-xs text-ink-3">{tab === "archive" ? "Archive is empty." : "No imports yet."}</p>
+        <p className="text-center text-xs text-ink-3">
+          {tab === "archive" ? "Archive is empty." : tab === "committed" ? "Nothing committed yet." : "No imports yet."}
+        </p>
       )}
     </div>
   );
