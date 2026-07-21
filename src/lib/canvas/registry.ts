@@ -42,8 +42,22 @@ export const OVERVIEW_CARDS: CardMeta[] = [
   { id: "daily-ledger", title: "Daily Ledger", description: "Day-by-day sales and labor table", defaultSpan: 2 },
 ];
 
-export const LABOR_CARDS: CardMeta[] = [];
-export const BOOKINGS_CARDS: CardMeta[] = [];
+export const LABOR_CARDS: CardMeta[] = [
+  { id: "labor-kpis", title: "Payroll KPIs", description: "Payroll $, %, hours, and year-end projection for the range", defaultSpan: 3 },
+  { id: "staffing-outlook", title: "Staffing Outlook", description: "Imported schedule vs typical staffing, day by day", defaultSpan: 3 },
+  { id: "labor-trend", title: "Labor Cost Trend & Projection", description: "Weekly labor — actuals plus the seasonal projection", defaultSpan: 2 },
+  { id: "employee-anomalies", title: "Employee Anomalies", description: "Hours patterns worth a look", defaultSpan: 1 },
+  { id: "labor-comparisons", title: "Labor MoM & YoY", description: "Cost and % of revenue vs prior month and year", defaultSpan: 2 },
+  { id: "dept-detail", title: "Latest Week by Department", description: "Department filter and per-department table", defaultSpan: 1 },
+  { id: "employee-table", title: "Employee Table", description: "Per-employee hours and cost for the latest week", defaultSpan: 2 },
+];
+
+export const BOOKINGS_CARDS: CardMeta[] = [
+  { id: "booking-stats", title: "Booked Ahead Stats", description: "Revenue, orders, guests, and next-7-days headline numbers", defaultSpan: 3 },
+  { id: "revenue-by-day", title: "Booked Revenue by Day", description: "Real forward orders — commitments, not projections", defaultSpan: 3 },
+  { id: "upcoming-bookings", title: "Upcoming Bookings", description: "Every booked day with its orders, statuses, and revenue", defaultSpan: 2 },
+  { id: "by-source", title: "By Source", description: "Where these bookings come from, with last-sync status", defaultSpan: 1 },
+];
 export const DELIVERY_CARDS: CardMeta[] = [];
 
 export const TAB_CARDS: Record<TabId, CardMeta[]> = {

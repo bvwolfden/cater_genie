@@ -4,6 +4,9 @@ import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
 import { BookingsChart } from "@/components/charts";
 import { Card, SectionHeader } from "@/components/primitives";
+import { CanvasGrid, type CanvasSlot } from "@/components/canvas/CanvasGrid";
+import { BOOKINGS_CARDS } from "@/lib/canvas/registry";
+import { getUserLayout } from "@/lib/layout";
 import { money, shortDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { CalendarCheck, Users, DollarSign, UploadCloud } from "lucide-react";
@@ -38,13 +41,11 @@ const dayName = (d: string) =>
   new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
 
 export default async function BookingsPage() {
-  const b = await getBookingsOutlook();
+  const [b, layout] = await Promise.all([getBookingsOutlook(), getUserLayout("bookings")]);
 
-  return (
-    <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
-      <Nav />
-      <Header />
-
+  // One renderer per registered card (ids in @/lib/canvas/registry).
+  const renderers: Record<string, React.ReactNode | null> = {
+    "booking-stats": (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Booked Revenue · ahead"
@@ -66,20 +67,19 @@ export default async function BookingsPage() {
           icon={<CalendarCheck className="h-4 w-4" />}
         />
       </div>
-
-      <div className="mt-4">
-        <Card className="card-pad">
-          <SectionHeader
-            title="Booked Revenue by Day"
-            subtitle="Real forward orders — commitments, not projections"
-          />
-          <BookingsChart days={b.days} window={b.window} />
-        </Card>
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="min-w-0 space-y-3 xl:col-span-2">
-          {b.days.length === 0 && (
+    ),
+    "revenue-by-day": (
+      <Card className="card-pad">
+        <SectionHeader
+          title="Booked Revenue by Day"
+          subtitle="Real forward orders — commitments, not projections"
+        />
+        <BookingsChart days={b.days} window={b.window} />
+      </Card>
+    ),
+    "upcoming-bookings": (
+      <div className="min-w-0 space-y-3">
+        {b.days.length === 0 && (
             <Card className="card-pad">
               <SectionHeader title="Upcoming Bookings" subtitle="Nothing on the books yet" />
               <p className="text-sm text-ink-2">
@@ -88,7 +88,7 @@ export default async function BookingsPage() {
               </p>
             </Card>
           )}
-          {b.days.map((d) => (
+        {b.days.map((d) => (
             <Card key={d.date} className="card-pad">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
@@ -123,12 +123,12 @@ export default async function BookingsPage() {
                 ))}
               </div>
             </Card>
-          ))}
-        </div>
-
-        <div className="min-w-0 space-y-4">
-          <Card className="card-pad">
-            <SectionHeader title="By Source" subtitle="Where these bookings come from" />
+        ))}
+      </div>
+    ),
+    "by-source": (
+      <Card className="card-pad">
+        <SectionHeader title="By Source" subtitle="Where these bookings come from" />
             <div className="divide-y divide-line">
               {b.bySource.map((s) => (
                 <div key={s.source} className="flex items-center justify-between py-2">
@@ -149,9 +149,16 @@ export default async function BookingsPage() {
               Caterease bookings land via the <UploadCloud className="inline h-3 w-3" />{" "}
               <Link href="/import" className="text-brand underline-offset-2 hover:underline">Import</Link> tab.
             </p>
-          </Card>
-        </div>
-      </div>
+      </Card>
+    ),
+  };
+  const slots: CanvasSlot[] = BOOKINGS_CARDS.map((m) => ({ id: m.id, element: renderers[m.id] ?? null }));
+
+  return (
+    <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
+      <Nav />
+      <Header />
+      <CanvasGrid tab="bookings" layout={layout} slots={slots} />
     </main>
   );
 }

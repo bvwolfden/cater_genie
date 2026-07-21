@@ -10,6 +10,9 @@ import { EmployeeAnomalies } from "@/components/EmployeeAnomalies";
 import { LaborTrendChart } from "@/components/charts";
 import { Card, SectionHeader, ChartLegend, Sparkline, Delta, ProjBadge } from "@/components/primitives";
 import { Explain } from "@/components/Explain";
+import { CanvasGrid, type CanvasSlot } from "@/components/canvas/CanvasGrid";
+import { LABOR_CARDS } from "@/lib/canvas/registry";
+import { getUserLayout } from "@/lib/layout";
 import { money, percent, hours, shortDate, deltaPct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -63,11 +66,12 @@ export default async function LaborPage({
   searchParams: Promise<{ dept?: string; from?: string; to?: string }>;
 }) {
   const { dept, from, to } = await searchParams;
-  const [a, detail, fp, staffing] = await Promise.all([
+  const [a, detail, fp, staffing, layout] = await Promise.all([
     getLaborAnalysis({ from, to }),
     getLaborDetail(dept),
     getForwardPlanning(),
     getStaffingOutlook(),
+    getUserLayout("labor"),
   ]);
 
   const weeklySpark = a.weekly.filter((w) => w.actualLabor != null).map((w) => w.actualLabor!);
@@ -105,13 +109,12 @@ export default async function LaborPage({
     />
   );
 
-  return (
-    <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
-      <Nav />
-      <Header control={<RangePicker from={a.range.from} to={a.range.to} availableDates={a.availableDates} basePath="/labor" />} />
-
-      {/* Period KPIs — compared to the SAME period last year */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  // One renderer per registered card (ids in @/lib/canvas/registry).
+  const renderers: Record<string, React.ReactNode | null> = {
+    // Period KPIs — compared to the SAME period last year
+    "labor-kpis": (
+      <div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <LaborStat
           label={`Payroll $ · ${rangeLabel}`}
           value={money(a.range.laborCost)}
@@ -141,50 +144,56 @@ export default async function LaborPage({
             </>
           }
         />
-      </div>
-      <p className="mt-2 text-[11px] text-ink-3">
-        Payroll figures come from the weekly comp sheet (loaded cost) — the timesheet-based wages
-        shown on the dashboard KPIs run materially lower. Reconciliation flags live in Data Quality.
-      </p>
-
-      {/* Staffing outlook — real imported schedule vs typical staffing */}
-      <div className="mt-4">
-        <StaffingOutlookPanel so={staffing} />
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="min-w-0 space-y-4 xl:col-span-2">
-          <Card className="card-pad">
-            <SectionHeader
-              title="Labor Cost Trend & Projection"
-              subtitle="Weekly labor — actual to date; projection = prior-year seasonality × 2026 pace"
-              right={<ChartLegend items={[{ color: "#FFB400", label: "Labor" }]} note="solid = actual, dotted = projected" />}
-            />
-            <LaborTrendChart weekly={a.weekly} boundary={boundary} model={a.assumptions} />
-          </Card>
-
-          <Card className="card-pad">
-            <SectionHeader title="Labor — Month-over-Month & Year-over-Year" subtitle="Cost, and as a % of revenue" />
-            <ComparisonPanels
-              mom={a.comparisons.mom}
-              yoy={a.comparisons.yoy}
-              spark={a.weekly.filter((w) => w.actualLabor != null).map((w) => w.actualLabor!)}
-              sparkLabel="weekly labor trend"
-            />
-          </Card>
-
-          <EmployeeTable detail={detail} />
         </div>
-
-        <div className="space-y-4">
-          <EmployeeAnomalies anomalies={fp.anomalies} />
-          <Card className="card-pad">
-            <SectionHeader title="Latest Week Detail" subtitle="By department · timesheet export" />
-            <DeptFilter departments={detail.departments.map((d) => d.department)} active={dept ?? "all"} />
-          </Card>
-          <DepartmentTable detail={detail} />
-        </div>
+        <p className="mt-2 text-[11px] text-ink-3">
+          Payroll figures come from the weekly comp sheet (loaded cost) — the timesheet-based wages
+          shown on the dashboard KPIs run materially lower. Reconciliation flags live in Data Quality.
+        </p>
       </div>
+    ),
+    // Staffing outlook — real imported schedule vs typical staffing
+    "staffing-outlook": <StaffingOutlookPanel so={staffing} />,
+    "labor-trend": (
+      <Card className="card-pad">
+        <SectionHeader
+          title="Labor Cost Trend & Projection"
+          subtitle="Weekly labor — actual to date; projection = prior-year seasonality × 2026 pace"
+          right={<ChartLegend items={[{ color: "#FFB400", label: "Labor" }]} note="solid = actual, dotted = projected" />}
+        />
+        <LaborTrendChart weekly={a.weekly} boundary={boundary} model={a.assumptions} />
+      </Card>
+    ),
+    "labor-comparisons": (
+      <Card className="card-pad">
+        <SectionHeader title="Labor — Month-over-Month & Year-over-Year" subtitle="Cost, and as a % of revenue" />
+        <ComparisonPanels
+          mom={a.comparisons.mom}
+          yoy={a.comparisons.yoy}
+          spark={a.weekly.filter((w) => w.actualLabor != null).map((w) => w.actualLabor!)}
+          sparkLabel="weekly labor trend"
+        />
+      </Card>
+    ),
+    "employee-table": <EmployeeTable detail={detail} />,
+    "employee-anomalies": <EmployeeAnomalies anomalies={fp.anomalies} />,
+    // Filter + table are coupled through the ?dept= searchParam — one card.
+    "dept-detail": (
+      <div className="space-y-4">
+        <Card className="card-pad">
+          <SectionHeader title="Latest Week Detail" subtitle="By department · timesheet export" />
+          <DeptFilter departments={detail.departments.map((d) => d.department)} active={dept ?? "all"} />
+        </Card>
+        <DepartmentTable detail={detail} />
+      </div>
+    ),
+  };
+  const slots: CanvasSlot[] = LABOR_CARDS.map((m) => ({ id: m.id, element: renderers[m.id] ?? null }));
+
+  return (
+    <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-8">
+      <Nav />
+      <Header control={<RangePicker from={a.range.from} to={a.range.to} availableDates={a.availableDates} basePath="/labor" />} />
+      <CanvasGrid tab="labor" layout={layout} slots={slots} />
     </main>
   );
 }
