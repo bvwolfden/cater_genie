@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, CalendarCheck, ClipboardCheck, UploadCloud } from "lucide-react";
+import { LayoutDashboard, Users, CalendarCheck, ClipboardCheck, UploadCloud, Truck } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { AuthButton } from "./AuthButton";
 
@@ -10,6 +10,7 @@ const TABS = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/labor", label: "Labor", icon: Users },
   { href: "/bookings", label: "Bookings", icon: CalendarCheck },
+  { href: "/delivery", label: "Delivery", icon: Truck },
   { href: "/entry", label: "Daily Entry", icon: ClipboardCheck },
   { href: "/import", label: "Import", icon: UploadCloud },
 ];

@@ -67,3 +67,27 @@ export function deltaPct(curr: number | null, prev: number | null): number | nul
   if (curr == null || prev == null || prev === 0) return null;
   return (curr - prev) / Math.abs(prev);
 }
+
+/** "11:30 AM" / "9:30 am" / "13:05" → minutes since midnight, else null. */
+export function timeToMinutes(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const m = s.trim().match(/^(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?$/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (min > 59) return null;
+  const ap = m[3]?.toLowerCase();
+  if (ap?.startsWith("p") && h !== 12) h += 12;
+  if (ap?.startsWith("a") && h === 12) h = 0;
+  if (h > 23) return null;
+  return h * 60 + min;
+}
+
+/** 690 → "11:30 AM" */
+export function minutesToLabel(min: number): string {
+  const h24 = Math.floor(min / 60) % 24;
+  const m = Math.round(min % 60);
+  const ap = h24 >= 12 ? "PM" : "AM";
+  const h = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h}:${String(m).padStart(2, "0")} ${ap}`;
+}

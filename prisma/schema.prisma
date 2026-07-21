@@ -287,12 +287,55 @@ model EventBooking {
   status    String? // definite | tentative | prospect...
   guests    Int?
   revenue   Decimal?     @db.Decimal(14, 2)
+  eventTime String? // delivery/serve start time as shown by the source ("11:30 AM")
+  company   String? // customer/company — proxy for the delivery building when grouping drops
+  orderId   String? // CaterTrax order id — durable join key to DeliveryStop
   source    SourceSystem @default(MANUAL)
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
   @@unique([eventDate, name])
   @@index([eventDate])
+}
+
+/// One CaterTrax delivery drop, keyed by the durable order id. Split from
+/// EventBooking because the two data families have different owners:
+/// enrichment (address/times, from the coversheet scrape) is overwritten by
+/// the daily sync; assignment (driver) is Kevin's system of record and must
+/// SURVIVE sync re-upserts. Sync only clears assignment if the order moves days.
+model DeliveryStop {
+  id           Int      @id @default(autoincrement())
+  orderId      String   @unique
+  date         DateTime @db.Date
+  // enrichment — sync-owned, refreshed each run (coversheet.asp)
+  deliveryTime String? // "11:00 AM"
+  addressRaw   String? // "501 Grant Street Suite 200"
+  city         String?
+  zip          String?
+  building     String? // "Union Trust Building" — same-building grouping key
+  addressKey   String? // normalized street+zip → GeoPoint.addressKey
+  // assignment — human-owned, never touched by sync
+  driverKey    String? // ScheduledShift employeeId, else "first last" lowercased
+  assignedAt   DateTime?
+  assignedBy   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([date])
+}
+
+/// Geocode cache — one row per normalized building address, geocoded once.
+model GeoPoint {
+  id         Int      @id @default(autoincrement())
+  addressKey String   @unique
+  addressRaw String
+  lat        Float?
+  lng        Float?
+  provider   String? // "nominatim" | "census"
+  failed     Boolean  @default(false) // don't re-hit the API for known misses
+  attempts   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 /// A falsifiable prediction the AI made on a given morning, later scored

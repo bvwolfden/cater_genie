@@ -66,6 +66,7 @@ const PAGES = [
   { path: "/", markers: ["Pulse of the Business", "Data Quality", "Weekly Revenue"] },
   { path: "/labor", markers: ["Payroll", "Latest Week Detail"] },
   { path: "/bookings", markers: ["Booked Revenue by Day", "By Source"] },
+  { path: "/delivery", markers: ["Delivery Board", "Unassigned drops"] },
   { path: "/entry", markers: ["Net sales"] },
   { path: "/import", markers: ["Import"] },
 ];

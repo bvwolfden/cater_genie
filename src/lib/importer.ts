@@ -35,6 +35,7 @@ export interface ParsedBooking {
   status?: string | null;
   guests?: number | null;
   revenue?: number | null;
+  eventTime?: string | null; // "11:30 AM" — serve/delivery start when the export has one
 }
 export interface ParsedShift {
   date: string;
@@ -195,7 +196,7 @@ Kinds and their target + allowed fields (map only columns that exist; header tex
 - "wiw_schedule" (When I Work SCHEDULE export — FUTURE shifts, filename like "Schedule for <dates>"; workbook pairs a "Hourly - X" pivot sheet with a per-shift "Schedules - X" sheet per department) -> target "shifts": date (the "Shift Start Date" column), department (the "Schedule" column), position, firstName, lastName, employeeId, startTime ("Shift Start Time"), endTime ("Shift End Time"), unpaidBreak, scheduledHours, hourlyRate, laborCost, status
   (list ALL "Schedules - *" sheets in "sheets"; SKIP the "Hourly - *" pivot sheets — they have one column per calendar day, not per-shift rows)
 - "wiw_shift_history" (When I Work SHIFT HISTORY / audit-log export — one row per schedule CHANGE event, sheet usually named "Shift History", ~68 columns with Previous-value pairs) -> target "shiftEvents": date ("Start Date"), occurredAt ("Occurred At"), reason ("Update Reason"), updatedFields ("Updated Fields"), department ("Schedule Name"), prevDepartment ("Previous Schedule Name"), assignee ("Assignee Name"), employeeId ("Assignee Employee ID"), prevDate ("Previous Start Date"), length ("Length"), prevLength ("Previous Length"), position ("Position Name")
-- "caterease_bookings" (event bookings/query export) -> target "bookings": eventDate, name, status, guests, revenue
+- "caterease_bookings" (event bookings/query export) -> target "bookings": eventDate, name, status, guests, revenue, eventTime (a serve/start/delivery time column, when present)
 - "unsupported": anything else (weekly rollups/comps, projections, unrecognizable). Give a short "reason".
 
 Respond with ONLY JSON (no fences):
@@ -212,7 +213,7 @@ Respond with ONLY JSON (no fences):
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
 const TEXT_FIELDS = new Set(["notes", "firstName", "lastName", "employeeId", "department", "position", "name", "status", "reason", "updatedFields", "assignee", "prevDepartment"]);
-const TIME_FIELDS = new Set(["startTime", "endTime"]);
+const TIME_FIELDS = new Set(["startTime", "endTime", "eventTime"]);
 const DATE_FIELDS = new Set(["occurredAt", "prevDate"]); // secondary dates (the row anchor date is handled separately)
 
 function applyMapping(wb: XLSX.WorkBook, m: ColumnMapping): ParsedImport {
@@ -509,8 +510,8 @@ export async function commitImportBatch(id: number): Promise<{ ok: boolean; rows
     const name = b.name ?? "(unnamed event)";
     await prisma.eventBooking.upsert({
       where: { eventDate_name: { eventDate, name } },
-      create: { eventDate, name, status: b.status ?? null, guests: b.guests ?? null, revenue: b.revenue ?? null, source: "MANUAL" },
-      update: { status: b.status ?? null, guests: b.guests ?? null, revenue: b.revenue ?? null },
+      create: { eventDate, name, status: b.status ?? null, guests: b.guests ?? null, revenue: b.revenue ?? null, eventTime: b.eventTime ?? null, source: "MANUAL" },
+      update: { status: b.status ?? null, guests: b.guests ?? null, revenue: b.revenue ?? null, ...(b.eventTime ? { eventTime: b.eventTime } : {}) },
     });
     rows++;
   }

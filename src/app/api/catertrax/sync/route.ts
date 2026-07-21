@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncCaterTrax, syncCaterTraxBookings } from "@/lib/connectors/catertrax";
+import { syncCaterTrax, syncCaterTraxBookings, syncDeliveryStops } from "@/lib/connectors/catertrax";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // day-by-day portal pulls over a range
@@ -38,6 +38,18 @@ export async function POST(req: NextRequest) {
       out.bookings = await syncCaterTraxBookings(days);
     } catch (err) {
       errors.push(`bookings: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Delivery-stop enrichment (coversheet addresses/times + geocodes) for the
+  // /delivery scheduler. Deliberately NON-FATAL: a failure degrades the board
+  // but must never fail the daily sync.
+  if (kind === "all" || kind === "bookings" || kind === "stops") {
+    const days = Math.max(1, Math.min(60, parseInt(params.get("days") || "14", 10) || 14));
+    try {
+      out.stops = await syncDeliveryStops(days);
+    } catch (err) {
+      out.stopsWarning = `stops: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
