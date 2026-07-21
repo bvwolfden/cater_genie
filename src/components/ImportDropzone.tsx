@@ -18,6 +18,7 @@ type Batch = {
     labor?: Record<string, unknown>[];
     bookings?: Record<string, unknown>[];
     shifts?: Record<string, unknown>[];
+    shiftEvents?: Record<string, unknown>[];
   } | null;
 };
 
@@ -78,6 +79,7 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
   const labor = p.labor ?? [];
   const bookings = p.bookings ?? [];
   const shifts = p.shifts ?? [];
+  const shiftEvents = p.shiftEvents ?? [];
 
   return (
     <div className="card overflow-hidden">
@@ -149,6 +151,23 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
                   { key: "endTime", label: "End" },
                   { key: "scheduledHours", label: "Hours" },
                   { key: "hourlyRate", label: "Rate", money: true },
+                ]}
+              />
+            </div>
+          )}
+          {shiftEvents.length > 0 && (
+            <div className="mb-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Schedule change events · {shiftEvents.length}</div>
+              <PreviewTable
+                rows={shiftEvents}
+                cols={[
+                  { key: "occurredAt", label: "Changed" },
+                  { key: "reason", label: "Action" },
+                  { key: "date", label: "Shift date" },
+                  { key: "department", label: "Dept" },
+                  { key: "assignee", label: "Who" },
+                  { key: "length", label: "Hours" },
+                  { key: "prevLength", label: "Prev h" },
                 ]}
               />
             </div>

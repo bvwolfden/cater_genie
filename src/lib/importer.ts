@@ -51,13 +51,28 @@ export interface ParsedShift {
   laborCost?: number | null;
   status?: string | null;
 }
+export interface ParsedShiftEvent {
+  date: string; // shift Start Date
+  occurredAt?: string | null; // when the change was made
+  reason?: string | null;
+  updatedFields?: string | null;
+  department?: string | null;
+  prevDepartment?: string | null;
+  assignee?: string | null;
+  employeeId?: string | null;
+  prevDate?: string | null;
+  length?: number | null;
+  prevLength?: number | null;
+  position?: string | null;
+}
 export interface ParsedImport {
-  kind: string; // daily_metrics | timesheet | wiw_schedule | catertrax_sales | caterease_bookings | unsupported | unknown
+  kind: string; // daily_metrics | timesheet | wiw_schedule | wiw_shift_history | catertrax_sales | caterease_bookings | unsupported | unknown
   summary: string;
   days: ParsedDay[];
   labor: ParsedLabor[];
   bookings: ParsedBooking[];
   shifts?: ParsedShift[]; // optional: batches parsed before schedules existed lack it
+  shiftEvents?: ParsedShiftEvent[];
 }
 
 // --- Coercion helpers --------------------------------------------------------
@@ -118,12 +133,14 @@ function sheetAoa(ws: XLSX.WorkSheet): Aoa {
 }
 
 function fmtRow(row: unknown[], rowNum: number): string {
-  const cells = row.slice(0, 22).map((c) => {
+  // Wide enough for WIW's Shift History export (Start Date is column 27,
+  // Length column 37) — the mapper can only map headers it can see.
+  const cells = row.slice(0, 48).map((c) => {
     if (c instanceof Date) return c.toISOString().slice(0, 10);
     const s = c == null ? "" : String(c);
     return s.length > 18 ? s.slice(0, 18) + "…" : s;
   });
-  return `r${rowNum}: ${cells.join(" | ")}`.slice(0, 400);
+  return `r${rowNum}: ${cells.join(" | ")}`.slice(0, 1000);
 }
 
 function buildPreview(wb: XLSX.WorkBook): string {
@@ -158,7 +175,7 @@ interface ColumnMapping {
   kind: string;
   summary: string;
   reason?: string;
-  target: "days" | "labor" | "bookings" | "shifts";
+  target: "days" | "labor" | "bookings" | "shifts" | "shiftEvents";
   sheets: string[];
   headerRow: number; // 1-based
   departmentFromSheetName?: boolean;
@@ -177,11 +194,12 @@ Kinds and their target + allowed fields (map only columns that exist; header tex
   (if sheets are per-department with no department column, list ALL department sheets in "sheets" and set departmentFromSheetName=true; skip summary/breaks sheets)
 - "wiw_schedule" (When I Work SCHEDULE export — FUTURE shifts, filename like "Schedule for <dates>"; workbook pairs a "Hourly - X" pivot sheet with a per-shift "Schedules - X" sheet per department) -> target "shifts": date (the "Shift Start Date" column), department (the "Schedule" column), position, firstName, lastName, employeeId, startTime ("Shift Start Time"), endTime ("Shift End Time"), unpaidBreak, scheduledHours, hourlyRate, laborCost, status
   (list ALL "Schedules - *" sheets in "sheets"; SKIP the "Hourly - *" pivot sheets — they have one column per calendar day, not per-shift rows)
+- "wiw_shift_history" (When I Work SHIFT HISTORY / audit-log export — one row per schedule CHANGE event, sheet usually named "Shift History", ~68 columns with Previous-value pairs) -> target "shiftEvents": date ("Start Date"), occurredAt ("Occurred At"), reason ("Update Reason"), updatedFields ("Updated Fields"), department ("Schedule Name"), prevDepartment ("Previous Schedule Name"), assignee ("Assignee Name"), employeeId ("Assignee Employee ID"), prevDate ("Previous Start Date"), length ("Length"), prevLength ("Previous Length"), position ("Position Name")
 - "caterease_bookings" (event bookings/query export) -> target "bookings": eventDate, name, status, guests, revenue
 - "unsupported": anything else (weekly rollups/comps, projections, unrecognizable). Give a short "reason".
 
 Respond with ONLY JSON (no fences):
-{ "kind": "...", "summary": string (<=140 chars: what the file is, chosen sheet(s), date range), "reason"?: string, "target": "days"|"labor"|"bookings", "sheets": [string], "headerRow": number (1-based row containing the column headers), "departmentFromSheetName"?: boolean, "columns": { "<field>": "<exact header text>" } }`;
+{ "kind": "...", "summary": string (<=140 chars: what the file is, chosen sheet(s), date range), "reason"?: string, "target": "days"|"labor"|"bookings"|"shifts"|"shiftEvents", "sheets": [string], "headerRow": number (1-based row containing the column headers), "departmentFromSheetName"?: boolean, "columns": { "<field>": "<exact header text>" } }`;
 
 // --- Direct extraction (PDF / image only) ------------------------------------
 const EXTRACT_SYSTEM = `You extract structured data from an operational report (PDF or screenshot) for a restaurant/catering business. Classify and extract EVERY data row. Dates ISO YYYY-MM-DD; dollar values plain numbers. Never invent values. If a total row duplicates detail rows, extract only detail rows.
@@ -193,11 +211,12 @@ Respond with ONLY JSON (no fences):
 // --- Mapping application ------------------------------------------------------
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
-const TEXT_FIELDS = new Set(["notes", "firstName", "lastName", "employeeId", "department", "position", "name", "status"]);
+const TEXT_FIELDS = new Set(["notes", "firstName", "lastName", "employeeId", "department", "position", "name", "status", "reason", "updatedFields", "assignee", "prevDepartment"]);
 const TIME_FIELDS = new Set(["startTime", "endTime"]);
+const DATE_FIELDS = new Set(["occurredAt", "prevDate"]); // secondary dates (the row anchor date is handled separately)
 
 function applyMapping(wb: XLSX.WorkBook, m: ColumnMapping): ParsedImport {
-  const out: ParsedImport = { kind: m.kind, summary: m.summary, days: [], labor: [], bookings: [], shifts: [] };
+  const out: ParsedImport = { kind: m.kind, summary: m.summary, days: [], labor: [], bookings: [], shifts: [], shiftEvents: [] };
   const dateField = m.target === "bookings" ? "eventDate" : "date";
 
   for (const sheetName of m.sheets) {
@@ -229,6 +248,8 @@ function applyMapping(wb: XLSX.WorkBook, m: ColumnMapping): ParsedImport {
           rec[field] = coerceText(v);
         } else if (TIME_FIELDS.has(field)) {
           rec[field] = coerceTime(v);
+        } else if (DATE_FIELDS.has(field)) {
+          rec[field] = coerceDate(v);
         } else if (field === "guests") {
           const n = coerceNum(v);
           rec[field] = n == null ? null : Math.round(n);
@@ -245,6 +266,7 @@ function applyMapping(wb: XLSX.WorkBook, m: ColumnMapping): ParsedImport {
       if (m.target === "days") out.days.push(rec as unknown as ParsedDay);
       else if (m.target === "labor") out.labor.push(rec as unknown as ParsedLabor);
       else if (m.target === "shifts") out.shifts!.push(rec as unknown as ParsedShift);
+      else if (m.target === "shiftEvents") out.shiftEvents!.push(rec as unknown as ParsedShiftEvent);
       else out.bookings.push(rec as unknown as ParsedBooking);
     }
   }
@@ -335,7 +357,7 @@ export async function parseImportFile(filename: string, buf: Buffer, mime: strin
 export async function createImportBatch(filename: string, buf: Buffer, mime: string) {
   try {
     const parsed = await parseImportFile(filename, buf, mime);
-    const empty = !parsed.days.length && !parsed.labor.length && !parsed.bookings.length && !parsed.shifts?.length;
+    const empty = !parsed.days.length && !parsed.labor.length && !parsed.bookings.length && !parsed.shifts?.length && !parsed.shiftEvents?.length;
     return prisma.importBatch.create({
       data: {
         filename,
@@ -390,12 +412,15 @@ export async function commitImportBatch(id: number): Promise<{ ok: boolean; rows
     }
   }
 
-  // Labor: replace-then-insert per date so re-imports don't duplicate.
+  // Labor: replace-then-insert per date so re-imports don't duplicate. All
+  // sources are cleared for the covered dates — a timesheet import is the
+  // authoritative record for those days (seeded WHENIWORK rows included;
+  // filtering to MANUAL only double-counted every seeded day).
   const labor = parsed.labor ?? [];
   if (labor.length) {
     const dates = [...new Set(labor.map((l) => l.date))];
     await prisma.laborEntry.deleteMany({
-      where: { source: "MANUAL", date: { in: dates.map((d) => new Date(`${d}T00:00:00Z`)) } },
+      where: { date: { in: dates.map((d) => new Date(`${d}T00:00:00Z`)) } },
     });
     await prisma.laborEntry.createMany({
       data: labor.map((l) => ({
@@ -443,6 +468,39 @@ export async function commitImportBatch(id: number): Promise<{ ok: boolean; rows
       })),
     });
     rows += shifts.length;
+  }
+
+  // Shift-history events: the export is a rolling window of the audit log, so
+  // replace any overlap by occurredAt range, then insert. Events are the raw
+  // material for the schedule build-curve — never mutated, only re-imported.
+  const shiftEvents = parsed.shiftEvents ?? [];
+  if (shiftEvents.length) {
+    const occs = shiftEvents.map((e) => e.occurredAt).filter(Boolean) as string[];
+    if (occs.length) {
+      const min = occs.reduce((a, b) => (a < b ? a : b));
+      const max = occs.reduce((a, b) => (a > b ? a : b));
+      await prisma.shiftEvent.deleteMany({
+        where: { occurredAt: { gte: new Date(`${min}T00:00:00Z`), lte: new Date(`${max}T23:59:59Z`) } },
+      });
+    }
+    await prisma.shiftEvent.createMany({
+      data: shiftEvents.map((e) => ({
+        occurredAt: new Date(`${e.occurredAt ?? e.date}T00:00:00Z`),
+        reason: e.reason ?? "unknown",
+        updatedFields: e.updatedFields ?? null,
+        department: e.department ?? null,
+        prevDepartment: e.prevDepartment ?? null,
+        assignee: e.assignee ?? null,
+        employeeId: e.employeeId ?? null,
+        shiftDate: new Date(`${e.date}T00:00:00Z`),
+        prevShiftDate: e.prevDate ? new Date(`${e.prevDate}T00:00:00Z`) : null,
+        length: e.length ?? null,
+        prevLength: e.prevLength ?? null,
+        position: e.position ?? null,
+        source: "WHENIWORK",
+      })),
+    });
+    rows += shiftEvents.length;
   }
 
   // Bookings: upsert on (eventDate, name).

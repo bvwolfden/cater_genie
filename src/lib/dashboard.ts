@@ -1315,7 +1315,17 @@ export interface StaffingDay {
   scheduledCost: number;
   headcount: number;
   projectedSales: number | null;
-  expectedHours: number | null; // weekday-typical hours × demand ratio
+  /** Curve benchmark: hours usually on the books this many days out (median). */
+  typicalByNow: number | null;
+  /** Where this weekday's schedule typically ends up (median final hours). */
+  typicalFinal: number | null;
+  /** typicalFinal − typicalByNow: hours usually still added from here. */
+  stillToCome: number | null;
+  /** Days between the schedule snapshot and this date (capped at 7). */
+  leadDays: number | null;
+  /** Which benchmark produced expectedHours/status. */
+  benchmark: "curve" | "worked" | "none";
+  expectedHours: number | null; // curve: typicalByNow · worked: weekday-typical × demand
   gapHours: number | null; // scheduled − expected
   scheduledLaborPct: number | null; // scheduled cost ÷ projected sales
   status: "short" | "ok" | "over" | "unknown";
@@ -1327,13 +1337,20 @@ export interface StaffingDept {
   scheduledHours: number;
   scheduledCost: number;
   headcount: number;
-  typicalHours: number | null; // avg weekly hours, recent timesheet weeks
+  typicalHours: number | null; // typical FINAL weekly hours (build-curve reconstruction, else timesheet avg)
   gapHours: number | null;
+  /** Share of this week's booked hours vs the dept's typical share — lead-invariant. */
+  share: number | null;
+  typicalShare: number | null;
   status: "short" | "ok" | "over" | "unknown";
 }
 
 export interface StaffingOutlook {
   window: { from: string; to: string };
+  /** The date the schedule/audit-log knowledge is current through. */
+  asOf: string | null;
+  /** True when the build-curve (Shift History import) is driving statuses. */
+  curveBased: boolean;
   totals: {
     scheduledHours: number;
     scheduledCost: number;
@@ -1341,20 +1358,39 @@ export interface StaffingOutlook {
     projectedSales: number | null;
     scheduledLaborPct: number | null;
     benchmarkLaborPct: number | null; // recent actual daily labor %
+    typicalByNowWeek: number | null; // sum of per-day usually-booked-by-now
+    typicalFinalWeek: number | null; // sum of per-day typical finals
   };
   days: StaffingDay[];
   byDepartment: StaffingDept[];
   callouts: { severity: "alert" | "warn" | "ok"; text: string }[];
 }
 
-const HOUR_TOLERANCE = 0.15; // ±15% of expected hours reads as "ok"
+const HOUR_TOLERANCE = 0.15; // ±15% of expected hours reads as "ok" (worked benchmark)
+// Build-curve pace tolerances are wider: n≈6 weeks per weekday and real
+// event-driven variance. Only flag what a manager would actually act on.
+const PACE_BEHIND = 0.6; // booked < 60% of usually-booked-by-now
+const PACE_AHEAD = 1.6;
+
+const median = (a: number[]): number | null => {
+  if (!a.length) return null;
+  const s = [...a].sort((x, y) => x - y);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+// WIW audit-log event classes (Update Reason values).
+const EV_CREATES = new Set(["create", "created-from-repeating-series"]);
+const EV_DELETES = new Set(["delete", "repeating-delete"]);
+const EV_UPDATES = new Set(["edit", "updated-from-repeating-series", "deleted-assigned-user"]);
 
 export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
-  const [shifts, metrics, laborEntries, bookings] = await Promise.all([
+  const [shifts, metrics, laborEntries, bookings, shiftEvents] = await Promise.all([
     prisma.scheduledShift.findMany({ orderBy: { date: "asc" } }),
     prisma.dailyMetric.findMany({ orderBy: { date: "asc" } }),
     prisma.laborEntry.findMany({}),
     prisma.eventBooking.findMany({}),
+    prisma.shiftEvent.findMany({}),
   ]);
   if (!shifts.length) return null;
 
@@ -1406,6 +1442,115 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
   };
   const benchmarkLaborPct = recSales ? recLabor / recSales : null;
 
+  // --- Schedule build-curve from the WIW audit log ---------------------------
+  // Kevin creates most of each week's shifts in the final days before they
+  // run (the log shows ~90% of hours land ≤6 days out), so "booked vs typical
+  // worked" over-flags early in the build. The fair benchmark: hours usually
+  // on the books at THIS lead time for THIS weekday, plus where the day
+  // typically finishes.
+  const dowOf = (d: string) => new Date(`${d}T00:00:00Z`).getUTCDay();
+  // date -> per-lead-bucket net hours (index 0..7, 7 = a week+ out)
+  const buildByDate = new Map<string, number[]>();
+  // dept -> weekStart -> net final hours (for typical dept share of the week)
+  const deptBuild = new Map<string, Map<string, number>>();
+  let evMin: string | null = null, evMax: string | null = null;
+  const bump = (date: string | null, occ: string, delta: number, dept?: string | null) => {
+    if (!date || !delta) return;
+    const lead = Math.min(Math.max(daysBetween(occ, date), 0), 7);
+    const arr = buildByDate.get(date) ?? new Array(8).fill(0);
+    arr[lead] += delta;
+    buildByDate.set(date, arr);
+    const dk = dept ?? "—";
+    const monday = addDays(date, -((dowOf(date) + 6) % 7));
+    const wk = deptBuild.get(dk) ?? new Map<string, number>();
+    wk.set(monday, (wk.get(monday) ?? 0) + delta);
+    deptBuild.set(dk, wk);
+  };
+  for (const ev of shiftEvents) {
+    const occ = iso(ev.occurredAt);
+    if (!evMin || occ < evMin) evMin = occ;
+    if (!evMax || occ > evMax) evMax = occ;
+    const d = ev.shiftDate ? iso(ev.shiftDate) : null;
+    if (!d) continue;
+    const L = n(ev.length) ?? 0;
+    const PL = n(ev.prevLength) ?? 0;
+    if (EV_CREATES.has(ev.reason)) bump(d, occ, L, ev.department);
+    else if (EV_DELETES.has(ev.reason)) bump(d, occ, -(L || PL), ev.department);
+    else if (EV_UPDATES.has(ev.reason)) {
+      const pd = ev.prevShiftDate ? iso(ev.prevShiftDate) : null;
+      const moved = pd != null && pd !== d;
+      const deptMoved = ev.prevDepartment != null && ev.prevDepartment !== ev.department;
+      const uf = ev.updatedFields ?? "";
+      if (moved || deptMoved) {
+        bump(moved ? pd : d, occ, -(PL || L), deptMoved ? ev.prevDepartment : ev.department);
+        bump(d, occ, L, ev.department);
+      } else if (/Length|Start Time|End Time|Unpaid Break/i.test(uf)) {
+        bump(d, occ, L - PL, ev.department);
+      }
+    }
+  }
+  // Curve samples: past dates whose build history is fully inside the log
+  // window (≥14 days after the log starts, and not after its end).
+  const curveLo = evMin ? addDays(evMin, 14) : null;
+  const cumByDow = new Map<number, number[][]>(); // dow -> [per-date cumulative-at-lead arrays]
+  const finalByDow = new Map<number, number[]>();
+  for (const [d, arr] of buildByDate) {
+    if (!curveLo || !evMax || d < curveLo || d > evMax) continue;
+    const cum = new Array(8).fill(0);
+    for (let lead = 7; lead >= 0; lead--) cum[lead] = (lead < 7 ? cum[lead + 1] : 0) + arr[lead];
+    const dow = dowOf(d);
+    const list = cumByDow.get(dow) ?? [];
+    list.push(cum);
+    cumByDow.set(dow, list);
+    const fin = finalByDow.get(dow) ?? [];
+    fin.push(cum[0]);
+    finalByDow.set(dow, fin);
+  }
+  const MIN_CURVE_SAMPLES = 3;
+  const typicalByLead = (dow: number, lead: number): number | null => {
+    const list = cumByDow.get(dow);
+    if (!list || list.length < MIN_CURVE_SAMPLES) return null;
+    return median(list.map((c) => c[Math.min(Math.max(lead, 0), 7)]));
+  };
+  const typicalFinalOf = (dow: number): number | null => {
+    const fin = finalByDow.get(dow);
+    return fin && fin.length >= MIN_CURVE_SAMPLES ? median(fin) : null;
+  };
+  // Typical dept share of a week's final hours (complete weeks only).
+  const completeWeeks = new Set<string>();
+  if (curveLo && evMax) {
+    for (let d = curveLo; d <= evMax; d = addDays(d, 7)) {
+      const monday = addDays(d, -((dowOf(d) + 6) % 7));
+      if (monday >= curveLo && addDays(monday, 6) <= evMax) completeWeeks.add(monday);
+    }
+  }
+  const weekTotals = new Map<string, number>();
+  for (const wk of deptBuild.values()) {
+    for (const [monday, h] of wk) {
+      if (completeWeeks.has(monday)) weekTotals.set(monday, (weekTotals.get(monday) ?? 0) + h);
+    }
+  }
+  const typicalDeptShareOf = (dept: string): number | null => {
+    const wk = deptBuild.get(dept);
+    if (!wk) return null;
+    const shares: number[] = [];
+    for (const monday of completeWeeks) {
+      const tot = weekTotals.get(monday) ?? 0;
+      if (tot > 0) shares.push((wk.get(monday) ?? 0) / tot);
+    }
+    return shares.length >= MIN_CURVE_SAMPLES ? median(shares) : null;
+  };
+  const typicalDeptFinalOf = (dept: string): number | null => {
+    const wk = deptBuild.get(dept);
+    if (!wk) return null;
+    const vals = [...completeWeeks].map((m) => wk.get(m) ?? 0);
+    return vals.length >= MIN_CURVE_SAMPLES ? median(vals) : null;
+  };
+  const curveBased = cumByDow.size > 0;
+  // The schedule snapshot is current through the newest audit event (the
+  // exports are taken together); fall back to the sales data edge.
+  const asOf = evMax ?? latestDate;
+
   // Booked events by date (real bookings only — no stubs here).
   const eventsByDate = new Map<string, { name: string; revenue: number | null; guests: number | null }[]>();
   for (const b of bookings) {
@@ -1447,27 +1592,55 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
     const dayEvents = eventsByDate.get(d) ?? [];
     const eventRev = dayEvents.reduce((s, e) => s + (e.revenue ?? 0), 0);
     const projectedSales = baseSales != null ? Math.round(baseSales + eventRev) : eventRev || null;
-    // Demand ratio scales weekday-typical hours when bookings add volume.
-    const ratio = baseSales ? clamp((baseSales + eventRev) / baseSales, 1, 2) : 1;
-    const typicalHours = avgOf(hoursByDow, dow);
-    const expectedHours = typicalHours != null ? typicalHours * ratio : null;
-    const gapHours = expectedHours != null ? v.hours - expectedHours : null;
-    const status: StaffingDay["status"] =
-      expectedHours == null || expectedHours === 0
-        ? "unknown"
-        : v.hours < expectedHours * (1 - HOUR_TOLERANCE)
+
+    const leadDays = asOf ? Math.max(daysBetween(asOf, d), 0) : null;
+    const typicalByNow = leadDays != null ? typicalByLead(dow, leadDays) : null;
+    const typicalFinal = typicalFinalOf(dow);
+
+    let benchmark: StaffingDay["benchmark"];
+    let expectedHours: number | null;
+    let status: StaffingDay["status"];
+    if (typicalByNow != null && typicalByNow > 0) {
+      // Build-curve pace: booked hours vs what's usually booked this far out.
+      benchmark = "curve";
+      expectedHours = typicalByNow;
+      const pace = v.hours / typicalByNow;
+      status =
+        pace < PACE_BEHIND && v.hours - typicalByNow < -8
           ? "short"
-          : v.hours > expectedHours * (1 + HOUR_TOLERANCE)
+          : pace > PACE_AHEAD && v.hours - typicalByNow > 8
             ? "over"
             : "ok";
+    } else {
+      // Fallback: weekday-typical worked hours scaled for booked demand.
+      const ratio = baseSales ? clamp((baseSales + eventRev) / baseSales, 1, 2) : 1;
+      const typicalWorked = avgOf(hoursByDow, dow);
+      expectedHours = typicalWorked != null ? typicalWorked * ratio : null;
+      benchmark = expectedHours != null ? "worked" : "none";
+      status =
+        expectedHours == null || expectedHours === 0
+          ? "unknown"
+          : v.hours < expectedHours * (1 - HOUR_TOLERANCE)
+            ? "short"
+            : v.hours > expectedHours * (1 + HOUR_TOLERANCE)
+              ? "over"
+              : "ok";
+    }
+    const gapHours = expectedHours != null ? v.hours - expectedHours : null;
+    const r1 = (x: number | null) => (x != null ? Math.round(x * 10) / 10 : null);
     return {
       date: d,
       scheduledHours: Math.round(v.hours * 10) / 10,
       scheduledCost: Math.round(v.cost),
       headcount: v.emps.size,
       projectedSales,
-      expectedHours: expectedHours != null ? Math.round(expectedHours * 10) / 10 : null,
-      gapHours: gapHours != null ? Math.round(gapHours * 10) / 10 : null,
+      typicalByNow: r1(typicalByNow),
+      typicalFinal: r1(typicalFinal),
+      stillToCome: typicalFinal != null && typicalByNow != null ? r1(Math.max(0, typicalFinal - typicalByNow)) : null,
+      leadDays,
+      benchmark,
+      expectedHours: r1(expectedHours),
+      gapHours: r1(gapHours),
       scheduledLaborPct: projectedSales ? v.cost / projectedSales : null,
       status,
       events: dayEvents,
@@ -1493,18 +1666,32 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
     return weeks.reduce((s, [, h]) => s + h, 0) / weeks.length;
   };
 
+  const bookedTotal = [...byDept.values()].reduce((s, v) => s + v.hours, 0);
   const byDepartment: StaffingDept[] = [...byDept.entries()]
     .map(([department, v]) => {
-      const typical = typicalDeptHours(department);
+      // Typical FINAL weekly hours: reconstruction when available, else timesheet.
+      const typical = typicalDeptFinalOf(department) ?? typicalDeptHours(department);
       const gap = typical != null ? v.hours - typical : null;
+      const share = bookedTotal > 0 ? v.hours / bookedTotal : null;
+      const typicalShare = typicalDeptShareOf(department);
+      // Mid-build, absolute hours always trail the final — the dept's SHARE of
+      // what's booked so far is the lead-invariant signal.
       const status: StaffingDept["status"] =
-        typical == null
-          ? "unknown"
-          : v.hours < typical * (1 - HOUR_TOLERANCE) - 2
+        share != null && typicalShare != null && typicalShare >= 0.05
+          ? share < typicalShare * 0.5
             ? "short"
-            : v.hours > typical * (1 + HOUR_TOLERANCE) + 2
+            : share > typicalShare * 1.7
               ? "over"
-              : "ok";
+              : "ok"
+          : typical == null
+            ? "unknown"
+            : curveBased
+              ? "ok" // absolute comparison is unfair mid-build; stay quiet
+              : v.hours < typical * (1 - HOUR_TOLERANCE) - 2
+                ? "short"
+                : v.hours > typical * (1 + HOUR_TOLERANCE) + 2
+                  ? "over"
+                  : "ok";
       return {
         department,
         scheduledHours: Math.round(v.hours * 10) / 10,
@@ -1512,6 +1699,8 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
         headcount: v.emps.size,
         typicalHours: typical != null ? Math.round(typical * 10) / 10 : null,
         gapHours: gap != null ? Math.round(gap * 10) / 10 : null,
+        share,
+        typicalShare,
         status,
       };
     })
@@ -1522,38 +1711,58 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
   const projTotal = days.every((d) => d.projectedSales == null) ? null : days.reduce((s, d) => s + (d.projectedSales ?? 0), 0);
   const headcount = new Set(upcoming.map((s) => s.employeeId || [s.firstName, s.lastName].join(" "))).size;
 
+  const typicalByNowWeek = days.every((d) => d.typicalByNow == null) ? null : days.reduce((s, d) => s + (d.typicalByNow ?? 0), 0);
+  const typicalFinalWeek = days.every((d) => d.typicalFinal == null) ? null : days.reduce((s, d) => s + (d.typicalFinal ?? 0), 0);
+
   // Callouts — the 1–3 things worth saying out loud on the main dashboard.
   const callouts: StaffingOutlook["callouts"] = [];
   const fmtDay = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+  const dowName = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
   const shortDays = days.filter((d) => d.status === "short").sort((a, b) => (a.gapHours ?? 0) - (b.gapHours ?? 0));
   const overDays = days.filter((d) => d.status === "over").sort((a, b) => (b.gapHours ?? 0) - (a.gapHours ?? 0));
   if (shortDays.length) {
     const w = shortDays[0];
     callouts.push({
       severity: "alert",
-      text: `${fmtDay(w.date)} looks understaffed: ${w.scheduledHours}h scheduled vs ~${w.expectedHours}h typical${w.events.length ? ` with ${w.events.length} booked event${w.events.length > 1 ? "s" : ""}` : ""} — add ~${Math.ceil(Math.abs(w.gapHours ?? 0) / 8)} shift${Math.abs(w.gapHours ?? 0) > 8 ? "s" : ""}.`,
+      text:
+        w.benchmark === "curve"
+          ? `${fmtDay(w.date)} is behind pace: ${w.scheduledHours}h booked vs ~${Math.round(w.typicalByNow ?? 0)}h usually by now — ${dowName(w.date)}s typically finish near ${Math.round(w.typicalFinal ?? 0)}h${w.events.length ? `, and ${w.events.length} event${w.events.length > 1 ? "s are" : " is"} booked that day` : ""}.`
+          : `${fmtDay(w.date)} looks understaffed: ${w.scheduledHours}h scheduled vs ~${w.expectedHours}h typical${w.events.length ? ` with ${w.events.length} booked event${w.events.length > 1 ? "s" : ""}` : ""} — add ~${Math.ceil(Math.abs(w.gapHours ?? 0) / 8)} shift${Math.abs(w.gapHours ?? 0) > 8 ? "s" : ""}.`,
     });
   }
   if (overDays.length) {
     const w = overDays[0];
     callouts.push({
       severity: "warn",
-      text: `${fmtDay(w.date)} looks overstaffed: ${w.scheduledHours}h vs ~${w.expectedHours}h typical (+${w.gapHours}h) — ~${money0(w.scheduledCost - Math.round((w.expectedHours ?? 0) * (w.scheduledHours ? w.scheduledCost / w.scheduledHours : 0)))} of trimmable labor.`,
+      text:
+        w.benchmark === "curve"
+          ? `${fmtDay(w.date)} is running heavy: ${w.scheduledHours}h booked vs ~${Math.round(w.typicalByNow ?? 0)}h usually by now (${dowName(w.date)}s typically finish near ${Math.round(w.typicalFinal ?? 0)}h).`
+          : `${fmtDay(w.date)} looks overstaffed: ${w.scheduledHours}h vs ~${w.expectedHours}h typical (+${w.gapHours}h) — ~${money0(w.scheduledCost - Math.round((w.expectedHours ?? 0) * (w.scheduledHours ? w.scheduledCost / w.scheduledHours : 0)))} of trimmable labor.`,
     });
   }
   const worstDept = byDepartment.find((d) => d.status === "short");
   if (worstDept) {
     callouts.push({
       severity: "warn",
-      text: `${worstDept.department} is scheduled ${Math.abs(worstDept.gapHours ?? 0)}h under its recent weekly average (${worstDept.scheduledHours}h vs ~${worstDept.typicalHours}h).`,
+      text:
+        worstDept.share != null && worstDept.typicalShare != null
+          ? `${worstDept.department} holds ${Math.round(worstDept.share * 100)}% of this week's booked hours vs a typical ${Math.round(worstDept.typicalShare * 100)}% — likely shifts still to add there.`
+          : `${worstDept.department} is scheduled ${Math.abs(worstDept.gapHours ?? 0)}h under its recent weekly average (${worstDept.scheduledHours}h vs ~${worstDept.typicalHours}h).`,
     });
   }
   if (!callouts.length) {
-    callouts.push({ severity: "ok", text: `Schedule tracks recent staffing levels — ${Math.round(totalsHours)}h across ${headcount} people.` });
+    callouts.push({
+      severity: "ok",
+      text: curveBased
+        ? `Schedule build is on pace — ${Math.round(totalsHours)}h booked${typicalByNowWeek != null ? ` vs ~${Math.round(typicalByNowWeek)}h usual by now` : ""}${typicalFinalWeek != null ? `, weeks typically finish near ${Math.round(typicalFinalWeek)}h` : ""}.`
+        : `Schedule tracks recent staffing levels — ${Math.round(totalsHours)}h across ${headcount} people.`,
+    });
   }
 
   return {
     window: { from, to },
+    asOf,
+    curveBased,
     totals: {
       scheduledHours: Math.round(totalsHours * 10) / 10,
       scheduledCost: Math.round(totalsCost),
@@ -1561,6 +1770,8 @@ export async function getStaffingOutlook(): Promise<StaffingOutlook | null> {
       projectedSales: projTotal,
       scheduledLaborPct: projTotal ? totalsCost / projTotal : null,
       benchmarkLaborPct,
+      typicalByNowWeek: typicalByNowWeek != null ? Math.round(typicalByNowWeek) : null,
+      typicalFinalWeek: typicalFinalWeek != null ? Math.round(typicalFinalWeek) : null,
     },
     days,
     byDepartment,

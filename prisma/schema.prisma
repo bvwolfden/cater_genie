@@ -251,6 +251,33 @@ model ScheduledShift {
   @@index([department])
 }
 
+/// One When I Work audit-log event (the "Shift History" export): every shift
+/// create / edit / delete with previous values. Two things fall out of it:
+/// the FINAL schedule for past dates (sum of deltas) and the BUILD CURVE —
+/// how many hours are usually on the books N days before a given weekday.
+/// Kevin builds most of each week's schedule in the final days, so raw
+/// "scheduled vs typical worked" comparisons over-flag; this fixes that.
+model ShiftEvent {
+  id             Int          @id @default(autoincrement())
+  occurredAt     DateTime // when the change happened
+  reason         String // create | created-from-repeating-series | edit | delete | repeating-delete | publish | confirm | ...
+  updatedFields  String?
+  department     String? // Schedule Name
+  prevDepartment String?
+  assignee       String?
+  employeeId     String?
+  shiftDate      DateTime?    @db.Date // Start Date of the shift being changed
+  prevShiftDate  DateTime?    @db.Date
+  length         Decimal?     @db.Decimal(10, 2) // shift hours after the change
+  prevLength     Decimal?     @db.Decimal(10, 2)
+  position       String?
+  source         SourceSystem @default(WHENIWORK)
+  createdAt      DateTime     @default(now())
+
+  @@index([shiftDate])
+  @@index([occurredAt])
+}
+
 /// Forward event bookings (Caterease exports / manual). The missing input the
 /// June forecast backtest identified: event days run ~7x a normal day.
 model EventBooking {

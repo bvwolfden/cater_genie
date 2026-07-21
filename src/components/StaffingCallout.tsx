@@ -29,7 +29,8 @@ export function StaffingCallout({ so }: { so: StaffingOutlook }) {
             <div className="flex flex-wrap items-center gap-x-2 text-sm font-semibold text-ink">
               Staffing · {shortDate(so.window.from)} – {shortDate(so.window.to)}
               <span className="text-[11px] font-normal text-ink-3">
-                {Math.round(so.totals.scheduledHours)}h · {so.totals.headcount} people scheduled
+                {Math.round(so.totals.scheduledHours)}h · {so.totals.headcount} people booked
+                {so.curveBased && so.totals.typicalFinalWeek != null ? ` · weeks typically finish ~${so.totals.typicalFinalWeek}h` : ""}
               </span>
             </div>
             {top && (
@@ -52,7 +53,11 @@ export function StaffingCallout({ so }: { so: StaffingOutlook }) {
               return (
                 <div
                   key={d.date}
-                  title={`${shortDate(d.date)} · ${d.scheduledHours}h scheduled${d.expectedHours != null ? ` vs ~${d.expectedHours}h typical` : ""}`}
+                  title={
+                    d.benchmark === "curve"
+                      ? `${shortDate(d.date)} · ${d.scheduledHours}h booked vs ~${Math.round(d.typicalByNow ?? 0)}h usual by now${d.typicalFinal != null ? ` · typically ends ~${Math.round(d.typicalFinal)}h` : ""}`
+                      : `${shortDate(d.date)} · ${d.scheduledHours}h scheduled${d.expectedHours != null ? ` vs ~${d.expectedHours}h typical` : ""}`
+                  }
                   className={cn("grid w-9 place-items-center rounded-lg border py-1 text-center", CHIP[d.status])}
                 >
                   <span className="text-[9px] font-semibold uppercase leading-3">{dow}</span>

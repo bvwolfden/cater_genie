@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { StaffingOutlook } from "@/lib/dashboard";
+import type { StaffingOutlook, StaffingDay } from "@/lib/dashboard";
 import { money, percent, shortDate, weekdayDate } from "@/lib/format";
 import { Card, EstBadge, SectionHeader } from "./primitives";
 import { Explain } from "./Explain";
@@ -8,7 +8,6 @@ import { CalendarClock, UploadCloud } from "lucide-react";
 
 const MODEL_NOTE =
   "modeled demand — “typical” staffing is the last 4 weeks of actuals scaled for booked events; real bookings/schedule data will replace this";
-
 const PILL: Record<string, string> = {
   short: "bg-rose/10 text-rose",
   over: "bg-amber/10 text-amber",
@@ -16,17 +15,26 @@ const PILL: Record<string, string> = {
   unknown: "bg-ink-3/10 text-ink-3",
 };
 
-const STATUS_LABEL: Record<string, string> = {
-  short: "short",
-  over: "over",
-  ok: "ok",
-  unknown: "no baseline",
-};
+function statusLabel(status: string, benchmark: string): string {
+  if (benchmark === "curve") {
+    return status === "short" ? "behind" : status === "over" ? "heavy" : status === "ok" ? "on pace" : "no baseline";
+  }
+  return status === "short" ? "short" : status === "over" ? "over" : status === "ok" ? "ok" : "no baseline";
+}
 
 function gapText(gap: number | null): { text: string; cls: string } {
   if (gap == null) return { text: "—", cls: "text-ink-3" };
   const r = Math.round(gap);
   return { text: `${r >= 0 ? "+" : ""}${r}h`, cls: r < -4 ? "text-rose" : r > 4 ? "text-amber" : "text-ink-2" };
+}
+
+function DayStatus({ d }: { d: StaffingDay }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>{statusLabel(d.status, d.benchmark)}</span>
+      {d.benchmark !== "curve" && <EstBadge note={MODEL_NOTE} />}
+    </span>
+  );
 }
 
 /** Labor page: full scheduled-vs-typical breakdown for the imported week. */
@@ -59,6 +67,7 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
   }
 
   const t = so.totals;
+  const curve = so.curveBased;
   // Derivation inputs: booked-event revenue is carried per day; the weekday
   // norm is whatever remains of each day's projection.
   const eventRevTotal = so.days.reduce((s, d) => s + d.events.reduce((x, e) => x + (e.revenue ?? 0), 0), 0);
@@ -77,16 +86,24 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
             Staffing Outlook · {shortDate(so.window.from)} – {shortDate(so.window.to)}
           </span>
         }
-        subtitle="When I Work schedule vs typical staffing for each weekday (last 4 weeks of actuals, scaled for booked events)"
-        right={<EstBadge note={MODEL_NOTE} />}
+        subtitle={
+          curve
+            ? `Schedule build pace vs history — hours usually booked by ${so.asOf ? shortDate(so.asOf) : "now"} for each weekday, from the When I Work audit log`
+            : "When I Work schedule vs typical staffing for each weekday (last 4 weeks of actuals, scaled for booked events)"
+        }
+        right={curve ? undefined : <EstBadge note={MODEL_NOTE} />}
       />
 
       {/* Week totals */}
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-xl border border-line bg-canvas-700 px-4 py-3">
-          <div className="stat-label">Scheduled Hours</div>
+          <div className="stat-label">Booked Hours</div>
           <div className="mt-1 text-xl font-semibold tabular-nums text-ink">{Math.round(t.scheduledHours)}h</div>
-          <div className="mt-0.5 text-[11px] text-ink-3">{t.headcount} people</div>
+          <div className="mt-0.5 text-[11px] text-ink-3">
+            {curve && t.typicalFinalWeek != null
+              ? `${t.headcount} people · weeks typically finish ~${t.typicalFinalWeek}h`
+              : `${t.headcount} people`}
+          </div>
         </div>
         <div className="rounded-xl border border-line bg-canvas-700 px-4 py-3">
           <div className="stat-label">Scheduled Labor $</div>
@@ -145,8 +162,8 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
                   label: "Compare to reality",
                   detail:
                     t.benchmarkLaborPct != null
-                      ? `Recent weeks actually ran ${percent(t.benchmarkLaborPct)} labor. If implied is far below recent actual, the schedule is probably missing shifts (or sales are over-projected) — not evidence of sudden efficiency.`
-                      : "No recent actual benchmark is available to compare against.",
+                      ? `Recent actual daily labor ran ${percent(t.benchmarkLaborPct)} of sales — the scheduled week should land in that neighborhood once fully built.`
+                      : "No recent daily labor benchmark available yet.",
                 },
               ]}
               note="Scheduled-rate wages run lower than the comp sheet's loaded payroll cost (taxes, wellness, draws), so don't compare this % directly against the payroll cards above."
@@ -172,30 +189,51 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
           <thead>
             <tr className="border-b border-line text-left text-[10px] uppercase tracking-wide text-ink-3">
               <th className="px-2 py-1.5 font-medium">Day</th>
-              <th className="px-2 py-1.5 text-right font-medium">Scheduled</th>
+              <th className="px-2 py-1.5 text-right font-medium">Booked</th>
               <th className="px-2 py-1.5 text-right font-medium">
                 <span className="inline-flex items-center gap-1">
-                  Typical
+                  {curve ? "Usual by now" : "Typical"}
                   <Explain
-                    title="Typical hours — how each day's baseline is built"
-                    steps={[
-                      {
-                        label: "Weekday average",
-                        detail: "Average worked hours for that weekday over the last 4 weeks of actual timesheets — last month's Mondays predict next Monday.",
-                      },
-                      {
-                        label: "Scale for bookings",
-                        detail: "If booked events push a day's projected sales above its norm, typical hours scale up by the same ratio (capped at 2×). A day with a big wedding expects more hands than a bare Tuesday.",
-                      },
-                      {
-                        label: "Gap and status",
-                        detail: "Gap = scheduled − typical. A day flags SHORT or OVER when the schedule misses typical by more than the tolerance band; small gaps stay OK.",
-                      },
-                    ]}
+                    title={curve ? "Usual by now — the schedule build curve" : "Typical hours — how each day's baseline is built"}
+                    steps={
+                      curve
+                        ? [
+                            {
+                              label: "The build curve",
+                              detail:
+                                "The When I Work audit log records when every shift was created. Most of each week's hours get added in the final days — so a light day far out is normal, not a crisis.",
+                            },
+                            {
+                              label: "Usual by now",
+                              detail:
+                                "For each day, we look at how many hours were on the books this same number of days ahead for that weekday over recent weeks, and take the median.",
+                            },
+                            {
+                              label: "Behind / on pace / heavy",
+                              detail:
+                                "A day flags BEHIND only when it's far under what's usually booked by now (under ~60%). ENDS ~ shows where that weekday's schedule typically finishes.",
+                            },
+                          ]
+                        : [
+                            {
+                              label: "Weekday average",
+                              detail: "Average worked hours for that weekday over the last 4 weeks of actual timesheets — last month's Mondays predict next Monday.",
+                            },
+                            {
+                              label: "Scale for bookings",
+                              detail: "If booked events push a day's projected sales above its norm, typical hours scale up by the same ratio (capped at 2×).",
+                            },
+                            {
+                              label: "Gap and status",
+                              detail: "Gap = scheduled − typical. A day flags SHORT or OVER when the schedule misses typical by more than the tolerance band.",
+                            },
+                          ]
+                    }
                   />
                 </span>
               </th>
               <th className="px-2 py-1.5 text-right font-medium">Gap</th>
+              {curve && <th className="px-2 py-1.5 text-right font-medium">Ends ~</th>}
               <th className="px-2 py-1.5 text-right font-medium">Staff</th>
               <th className="px-2 py-1.5 text-right font-medium">Labor $</th>
               <th className="px-2 py-1.5 text-right font-medium">
@@ -234,17 +272,27 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
                     )}
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink">{d.scheduledHours}h</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{d.expectedHours != null ? `${d.expectedHours}h` : "—"}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">
+                    {d.benchmark === "curve"
+                      ? d.typicalByNow != null
+                        ? `${Math.round(d.typicalByNow)}h`
+                        : "—"
+                      : d.expectedHours != null
+                        ? `${d.expectedHours}h`
+                        : "—"}
+                  </td>
                   <td className={cn("px-2 py-1.5 text-right tabular-nums font-medium", gap.cls)}>{gap.text}</td>
+                  {curve && (
+                    <td className="px-2 py-1.5 text-right tabular-nums text-ink-3">
+                      {d.typicalFinal != null ? `${Math.round(d.typicalFinal)}h` : "—"}
+                    </td>
+                  )}
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{d.headcount || "—"}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{money(d.scheduledCost)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{money(d.projectedSales)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-ink-2">{percent(d.scheduledLaborPct)}</td>
                   <td className="px-2 py-1.5 text-right">
-                    <span className="inline-flex items-center gap-1">
-                      <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>{STATUS_LABEL[d.status]}</span>
-                      <EstBadge note={MODEL_NOTE} />
-                    </span>
+                    <DayStatus d={d} />
                   </td>
                 </tr>
               );
@@ -255,7 +303,9 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
 
       {/* Department breakdown */}
       <div className="mt-4">
-        <div className="mb-2 text-sm font-semibold text-ink">By department · scheduled vs recent weekly average</div>
+        <div className="mb-2 text-sm font-semibold text-ink">
+          {curve ? "By department · share of this week's booked hours vs typical share" : "By department · scheduled vs recent weekly average"}
+        </div>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {so.byDepartment.map((d) => {
             const gap = gapText(d.gapHours);
@@ -264,14 +314,33 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-ink">{d.department}</span>
                   <span className="flex items-center gap-1">
-                    <EstBadge note={MODEL_NOTE} />
-                    <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>{STATUS_LABEL[d.status]}</span>
+                    {!curve && <EstBadge note={MODEL_NOTE} />}
+                    <span className={cn("pill text-[10px] uppercase", PILL[d.status])}>
+                      {curve
+                        ? d.status === "short"
+                          ? "light so far"
+                          : d.status === "over"
+                            ? "heavy"
+                            : d.status === "ok"
+                              ? "in line"
+                              : "no baseline"
+                        : statusLabel(d.status, "worked")}
+                    </span>
                   </span>
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
-                  <span>Scheduled <b className="tabular-nums text-ink">{Math.round(d.scheduledHours)}h</b></span>
-                  <span>Typical <b className="tabular-nums text-ink">{d.typicalHours != null ? `${Math.round(d.typicalHours)}h` : "—"}</b></span>
-                  <span>Gap <b className={cn("tabular-nums", gap.cls)}>{gap.text}</b></span>
+                  <span>Booked <b className="tabular-nums text-ink">{Math.round(d.scheduledHours)}h</b></span>
+                  {d.share != null && d.typicalShare != null ? (
+                    <span>
+                      Share <b className="tabular-nums text-ink">{Math.round(d.share * 100)}%</b>{" "}
+                      <span className="text-ink-3">vs ~{Math.round(d.typicalShare * 100)}% typical</span>
+                    </span>
+                  ) : (
+                    <>
+                      <span>Typical week <b className="tabular-nums text-ink">{d.typicalHours != null ? `${Math.round(d.typicalHours)}h` : "—"}</b></span>
+                      <span>Gap <b className={cn("tabular-nums", gap.cls)}>{gap.text}</b></span>
+                    </>
+                  )}
                   <span>{money(d.scheduledCost)} · {d.headcount} staff</span>
                 </div>
               </div>
@@ -281,10 +350,22 @@ export function StaffingOutlookPanel({ so }: { so: StaffingOutlook | null }) {
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
-        <span className="font-medium text-ink-2">How to read this:</span> &ldquo;typical&rdquo; is the average for that weekday
-        (or department-week) over the last 4 weeks of actuals, scaled up when booked events add volume. Short days need shifts
-        added in When I Work; over days are trimmable labor. Imported from the When I Work schedule export — automated sync
-        arrives with API credentials.
+        <span className="font-medium text-ink-2">How to read this:</span>{" "}
+        {curve ? (
+          <>
+            Kevin builds most of each week&apos;s schedule in the final days, so days are judged against the{" "}
+            <span className="font-medium text-ink-2">build curve</span> — hours usually on the books this many days out for
+            that weekday (median of recent weeks, from the When I Work audit log). <span className="font-medium text-ink-2">Behind</span>{" "}
+            means far under the usual pace; <span className="font-medium text-ink-2">Ends ~</span> is where the day typically
+            finishes. Department pills compare each department&apos;s share of booked hours against its usual share of the week.
+          </>
+        ) : (
+          <>
+            &ldquo;typical&rdquo; is the average for that weekday (or department-week) over the last 4 weeks of actuals, scaled
+            up when booked events add volume. Short days need shifts added in When I Work; over days are trimmable labor.
+          </>
+        )}{" "}
+        Imported from When I Work exports — automated sync arrives with API credentials.
       </p>
     </Card>
   );
