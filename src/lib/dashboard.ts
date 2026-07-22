@@ -1929,3 +1929,42 @@ export async function getBookingsOutlook(): Promise<BookingsOutlook> {
     lastSync: lastRun ? lastRun.startedAt.toISOString() : null,
   };
 }
+
+// --- Upcoming time off (When I Work Time-Off Requests import) ----------------
+
+export interface TimeOffView {
+  name: string | null;
+  type: string | null;
+  status: string | null; // null/"Approved" render plain; "Pending" gets a badge
+  start: string; // ISO
+  end: string | null; // ISO, null = single day
+  hours: number | null; // unpaid + paid
+}
+
+/** Approved + pending time-off requests that are current or upcoming, deduped
+ *  (WIW exports occasionally carry double-submitted identical requests).
+ *  Denied/canceled requests are excluded. */
+export async function getUpcomingTimeOff(limit = 20): Promise<TimeOffView[]> {
+  const today = new Date(`${iso(new Date())}T00:00:00Z`);
+  const rows = await prisma.timeOffRequest.findMany({
+    where: {
+      OR: [{ startDate: { gte: today } }, { endDate: { gte: today } }],
+      NOT: { status: { in: ["Denied", "Canceled", "Cancelled"] } },
+    },
+    orderBy: [{ startDate: "asc" }, { name: "asc" }],
+    take: limit * 2,
+  });
+  const seen = new Set<string>();
+  const out: TimeOffView[] = [];
+  for (const r of rows) {
+    const start = iso(r.startDate);
+    const end = r.endDate ? iso(r.endDate) : null;
+    const key = `${r.name}|${r.type}|${start}|${end}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const hours = (n(r.unpaidHours) ?? 0) + (n(r.paidHours) ?? 0);
+    out.push({ name: r.name, type: r.type, status: r.status, start, end: end === start ? null : end, hours: hours || null });
+    if (out.length >= limit) break;
+  }
+  return out;
+}

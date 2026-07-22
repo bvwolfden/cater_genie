@@ -1,4 +1,4 @@
-import { getLaborAnalysis, getLaborDetail, getForwardPlanning, getStaffingOutlook } from "@/lib/dashboard";
+import { getLaborAnalysis, getLaborDetail, getForwardPlanning, getStaffingOutlook, getUpcomingTimeOff } from "@/lib/dashboard";
 import { Header } from "@/components/Header";
 import { Nav } from "@/components/Nav";
 import { DeptFilter } from "@/components/DeptFilter";
@@ -66,12 +66,13 @@ export default async function LaborPage({
   searchParams: Promise<{ dept?: string; from?: string; to?: string }>;
 }) {
   const { dept, from, to } = await searchParams;
-  const [a, detail, fp, staffing, layout] = await Promise.all([
+  const [a, detail, fp, staffing, layout, timeOff] = await Promise.all([
     getLaborAnalysis({ from, to }),
     getLaborDetail(dept),
     getForwardPlanning(),
     getStaffingOutlook(),
     getUserLayout("labor"),
+    getUpcomingTimeOff(),
   ]);
 
   const weeklySpark = a.weekly.filter((w) => w.actualLabor != null).map((w) => w.actualLabor!);
@@ -176,6 +177,33 @@ export default async function LaborPage({
     ),
     "employee-table": <EmployeeTable detail={detail} />,
     "employee-anomalies": <EmployeeAnomalies anomalies={fp.anomalies} />,
+    // Approved WIW time-off on the horizon — null until a Time-Off Requests
+    // export is imported, then the card lights up (library shows it either way).
+    "time-off": timeOff.length === 0 ? null : (
+      <Card className="card-pad">
+        <SectionHeader title="Upcoming Time Off" subtitle="Approved requests · When I Work" />
+        <div className="divide-y divide-line">
+          {timeOff.map((t, i) => (
+            <div key={i} className="flex items-center justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-sm font-medium text-ink">{t.name ?? "(unnamed)"}</span>
+                  {t.status === "Pending" && (
+                    <span className="shrink-0 rounded-full bg-amber/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-amber">pending</span>
+                  )}
+                </div>
+                <div className="text-[11px] text-ink-3">
+                  {shortDate(t.start)}
+                  {t.end ? ` – ${shortDate(t.end)}` : ""}
+                  {t.type ? ` · ${t.type}` : ""}
+                </div>
+              </div>
+              {t.hours != null && <span className="shrink-0 text-sm tabular-nums text-ink-2">{hours(t.hours)}</span>}
+            </div>
+          ))}
+        </div>
+      </Card>
+    ),
     // Filter + table are coupled through the ?dept= searchParam — one card.
     "dept-detail": (
       <div className="space-y-4">

@@ -66,14 +66,59 @@ export interface ParsedShiftEvent {
   prevLength?: number | null;
   position?: string | null;
 }
+export interface ParsedWeek {
+  week: string; // the raw range label, e.g. "1/5/26 - 1/11/26"
+  weekStart: string; // ISO, parsed from the label
+  weekEnd?: string | null;
+  revenue?: number | null; // current-year weekly revenue
+  revenuePrev1?: number | null; // prior-year weekly revenue
+  laborCost?: number | null; // current-year gross weekly labor $
+  laborPct?: number | null;
+}
+export interface ParsedEmployee {
+  wiwUserId: string;
+  employeeId?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  schedules?: string | null;
+  positions?: string | null;
+  tags?: string | null;
+  baseRate?: number | null;
+  maxHours?: number | null;
+  notes?: string | null;
+}
+export interface ParsedJobSite {
+  name: string;
+  address?: string | null;
+  description?: string | null;
+  schedules?: string | null;
+}
+export interface ParsedTimeOff {
+  startDate: string;
+  endDate?: string | null;
+  name?: string | null;
+  employeeId?: string | null;
+  email?: string | null;
+  type?: string | null;
+  status?: string | null; // Approved | Pending | Denied | Canceled
+  requestedAt?: string | null;
+  paidHours?: number | null;
+  unpaidHours?: number | null;
+}
 export interface ParsedImport {
-  kind: string; // daily_metrics | timesheet | wiw_schedule | wiw_shift_history | catertrax_sales | caterease_bookings | unsupported | unknown
+  kind: string; // daily_metrics | timesheet | wiw_schedule | wiw_shift_history | catertrax_sales | caterease_bookings | weekly_comp | wiw_users | wiw_job_sites | wiw_time_off | unsupported | unknown
   summary: string;
   days: ParsedDay[];
   labor: ParsedLabor[];
   bookings: ParsedBooking[];
   shifts?: ParsedShift[]; // optional: batches parsed before schedules existed lack it
   shiftEvents?: ParsedShiftEvent[];
+  weeks?: ParsedWeek[];
+  employees?: ParsedEmployee[];
+  jobSites?: ParsedJobSite[];
+  timeOff?: ParsedTimeOff[];
 }
 
 // --- Coercion helpers --------------------------------------------------------
@@ -83,7 +128,8 @@ function coerceDate(v: unknown): string | null {
   if (v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0, 10);
   if (typeof v === "string") {
     const s = v.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const iso = s.match(/^(\d{4}-\d{2}-\d{2})(?:\b|T)/); // "2026-06-27" or "2026-06-27 11:39 am"
+    if (iso) return iso[1];
     const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
     if (m) {
       const yr = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
@@ -109,6 +155,17 @@ const coerceText = (v: unknown): string | null => {
   const s = String(v).trim();
   return s || null;
 };
+
+// "1/5/26 - 1/11/26" → { start, end }. Junk rows ("Check Line", totals) fail
+// the start-date parse and are skipped like any other anchorless row.
+function parseWeekRange(v: unknown): { start: string; end: string | null } | null {
+  const s = coerceText(v);
+  if (!s) return null;
+  const parts = s.split(/\s*[-–]\s*/);
+  const start = coerceDate(parts[0]);
+  if (!start) return null;
+  return { start, end: parts.length > 1 ? coerceDate(parts[parts.length - 1]) : null };
+}
 
 // Shift times land as strings ("5:00 am"), Excel time fractions, or Dates
 // depending on how the export was saved — normalize all three for display.
@@ -176,12 +233,26 @@ interface ColumnMapping {
   kind: string;
   summary: string;
   reason?: string;
-  target: "days" | "labor" | "bookings" | "shifts" | "shiftEvents";
+  target: "days" | "labor" | "bookings" | "shifts" | "shiftEvents" | "weeks" | "employees" | "jobSites" | "timeOff";
   sheets: string[];
   headerRow: number; // 1-based
   departmentFromSheetName?: boolean;
   columns: Record<string, string>; // field -> exact header text
 }
+
+// Every target has one anchor column: a row without a parseable anchor value
+// is skipped (this is what drops "Totals"/"Check Line" junk rows).
+const TARGET_ANCHOR: Record<ColumnMapping["target"], { field: string; kind: "date" | "text" | "week" }> = {
+  days: { field: "date", kind: "date" },
+  labor: { field: "date", kind: "date" },
+  bookings: { field: "eventDate", kind: "date" },
+  shifts: { field: "date", kind: "date" },
+  shiftEvents: { field: "date", kind: "date" },
+  weeks: { field: "week", kind: "week" },
+  employees: { field: "wiwUserId", kind: "text" },
+  jobSites: { field: "name", kind: "text" },
+  timeOff: { field: "startDate", kind: "date" },
+};
 
 const MAPPING_SYSTEM = `You classify an operational spreadsheet for a restaurant/catering business and return a COLUMN MAPPING — you do NOT extract rows. Code will apply your mapping to every row.
 
@@ -197,10 +268,15 @@ Kinds and their target + allowed fields (map only columns that exist; header tex
   (list ALL "Schedules - *" sheets in "sheets"; SKIP the "Hourly - *" pivot sheets — they have one column per calendar day, not per-shift rows)
 - "wiw_shift_history" (When I Work SHIFT HISTORY / audit-log export — one row per schedule CHANGE event, sheet usually named "Shift History", ~68 columns with Previous-value pairs) -> target "shiftEvents": date ("Start Date"), occurredAt ("Occurred At"), reason ("Update Reason"), updatedFields ("Updated Fields"), department ("Schedule Name"), prevDepartment ("Previous Schedule Name"), assignee ("Assignee Name"), employeeId ("Assignee Employee ID"), prevDate ("Previous Start Date"), length ("Length"), prevLength ("Previous Length"), position ("Position Name")
 - "caterease_bookings" (event bookings/query export) -> target "bookings": eventDate, name, status, guests, revenue, eventTime (a serve/start/delivery time column, when present)
-- "unsupported": anything else (weekly rollups/comps, projections, unrecognizable). Give a short "reason".
+- "weekly_comp" (Kevin's weekly sales/labor comparison workbook — one row per week with a "1/5/26 - 1/11/26"-style Week range column, sheet often named "Revenue Comp …") -> target "weeks": week (the Week range-label column), revenue (CURRENT-year weekly revenue), revenuePrev1 (prior-year weekly revenue), laborCost (the "(Gross) Weekly Labor $ …" column — its title often carries a STALE year label from sheet copying; the workbook's main comp sheet has exactly one such column and it is current-year labor), laborPct (current-year weekly labor %, NOT cumulative)
+  (choose only the current-year comp sheet; skip prior-year-only, cumulative, and "Revenue to Labor" sheets)
+- "wiw_users" (When I Work USERS export — roster snapshot, sheet usually "Employees") -> target "employees": wiwUserId (the "WIW User ID (DO NOT MODIFY)" column), employeeId, firstName, lastName, email, phone, schedules, positions, tags, baseRate ("Base Hourly Rate"), maxHours ("Max Hours"), notes
+- "wiw_job_sites" (When I Work JOB SITES export — venue address book) -> target "jobSites": name, address, description, schedules
+- "wiw_time_off" (When I Work TIME-OFF REQUESTS export) -> target "timeOff": startDate ("Start Date"), endDate ("End Date"), name, employeeId, email, type, status, requestedAt ("Created At"), paidHours, unpaidHours
+- "unsupported": anything else (projections, unrecognizable). Give a short "reason".
 
 Respond with ONLY JSON (no fences):
-{ "kind": "...", "summary": string (<=140 chars: what the file is, chosen sheet(s), date range), "reason"?: string, "target": "days"|"labor"|"bookings"|"shifts"|"shiftEvents", "sheets": [string], "headerRow": number (1-based row containing the column headers), "departmentFromSheetName"?: boolean, "columns": { "<field>": "<exact header text>" } }`;
+{ "kind": "...", "summary": string (<=140 chars: what the file is, chosen sheet(s), date range), "reason"?: string, "target": "days"|"labor"|"bookings"|"shifts"|"shiftEvents"|"weeks"|"employees"|"jobSites"|"timeOff", "sheets": [string], "headerRow": number (1-based row containing the column headers), "departmentFromSheetName"?: boolean, "columns": { "<field>": "<exact header text>" } }`;
 
 // --- Direct extraction (PDF / image only) ------------------------------------
 const EXTRACT_SYSTEM = `You extract structured data from an operational report (PDF or screenshot) for a restaurant/catering business. Classify and extract EVERY data row. Dates ISO YYYY-MM-DD; dollar values plain numbers. Never invent values. If a total row duplicates detail rows, extract only detail rows.
@@ -212,13 +288,33 @@ Respond with ONLY JSON (no fences):
 // --- Mapping application ------------------------------------------------------
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
-const TEXT_FIELDS = new Set(["notes", "firstName", "lastName", "employeeId", "department", "position", "name", "status", "reason", "updatedFields", "assignee", "prevDepartment"]);
+const TEXT_FIELDS = new Set([
+  "notes", "firstName", "lastName", "employeeId", "department", "position", "name", "status", "reason",
+  "updatedFields", "assignee", "prevDepartment", "wiwUserId", "email", "phone", "schedules", "positions",
+  "tags", "type", "address", "description",
+]);
 const TIME_FIELDS = new Set(["startTime", "endTime", "eventTime"]);
-const DATE_FIELDS = new Set(["occurredAt", "prevDate"]); // secondary dates (the row anchor date is handled separately)
+const DATE_FIELDS = new Set(["occurredAt", "prevDate", "endDate", "requestedAt"]); // secondary dates (the row anchor is handled separately)
+
+// The sheet preview truncates long headers to 18 chars + "…", so the model
+// may return a truncated header ("WIW User ID (DO NO…"). Exact match first,
+// then a prefix match (guarded to ≥4 chars so blank cells never win).
+function findColumn(header: string[], want: string): number {
+  const exact = header.indexOf(norm(want));
+  if (exact >= 0) return exact;
+  const w = norm(want).replace(/…$/, "");
+  if (w.length < 4) return -1;
+  return header.findIndex((h) => h.length >= 4 && (h.startsWith(w) || w.startsWith(h)));
+}
 
 function applyMapping(wb: XLSX.WorkBook, m: ColumnMapping): ParsedImport {
-  const out: ParsedImport = { kind: m.kind, summary: m.summary, days: [], labor: [], bookings: [], shifts: [], shiftEvents: [] };
-  const dateField = m.target === "bookings" ? "eventDate" : "date";
+  const out: ParsedImport = {
+    kind: m.kind, summary: m.summary,
+    days: [], labor: [], bookings: [], shifts: [], shiftEvents: [], weeks: [], employees: [], jobSites: [], timeOff: [],
+  };
+  const anchor = TARGET_ANCHOR[m.target] ?? TARGET_ANCHOR.days;
+  // Derived-from-anchor fields don't count as "row has data" on their own.
+  const derived = new Set([anchor.field, "weekStart", "weekEnd", "department"]);
 
   for (const sheetName of m.sheets) {
     const ws = wb.Sheets[sheetName];
@@ -229,21 +325,36 @@ function applyMapping(wb: XLSX.WorkBook, m: ColumnMapping): ParsedImport {
     // field -> column index
     const cols = new Map<string, number>();
     for (const [field, headerText] of Object.entries(m.columns ?? {})) {
-      const idx = header.indexOf(norm(headerText));
+      const idx = findColumn(header, headerText);
       if (idx >= 0) cols.set(field, idx);
     }
-    if (!cols.has(dateField)) continue;
+    if (!cols.has(anchor.field)) continue;
 
     for (let r = 0; r < aoa.length; r++) {
       if (r === headerIdx) continue;
       const row = aoa[r];
       if (!row?.length) continue;
-      const date = coerceDate(row[cols.get(dateField)!]);
-      if (!date) continue;
 
-      const rec: Record<string, unknown> = { [dateField]: date };
+      const rawAnchor = row[cols.get(anchor.field)!];
+      const rec: Record<string, unknown> = {};
+      if (anchor.kind === "date") {
+        const date = coerceDate(rawAnchor);
+        if (!date) continue;
+        rec[anchor.field] = date;
+      } else if (anchor.kind === "week") {
+        const range = parseWeekRange(rawAnchor);
+        if (!range) continue;
+        rec.week = coerceText(rawAnchor);
+        rec.weekStart = range.start;
+        rec.weekEnd = range.end;
+      } else {
+        const text = coerceText(rawAnchor);
+        if (!text) continue;
+        rec[anchor.field] = text;
+      }
+
       for (const [field, idx] of cols) {
-        if (field === dateField) continue;
+        if (field === anchor.field) continue;
         const v = row[idx];
         if (TEXT_FIELDS.has(field)) {
           rec[field] = coerceText(v);
@@ -260,14 +371,18 @@ function applyMapping(wb: XLSX.WorkBook, m: ColumnMapping): ParsedImport {
       }
       if ((m.target === "labor" || m.target === "shifts") && m.departmentFromSheetName) rec.department = rec.department ?? sheetName;
 
-      // Skip rows that carry no values beyond the date.
-      const hasValue = Object.entries(rec).some(([k, v]) => k !== dateField && k !== "department" && v != null);
+      // Skip rows that carry no values beyond the anchor.
+      const hasValue = Object.entries(rec).some(([k, v]) => !derived.has(k) && v != null);
       if (!hasValue) continue;
 
       if (m.target === "days") out.days.push(rec as unknown as ParsedDay);
       else if (m.target === "labor") out.labor.push(rec as unknown as ParsedLabor);
       else if (m.target === "shifts") out.shifts!.push(rec as unknown as ParsedShift);
       else if (m.target === "shiftEvents") out.shiftEvents!.push(rec as unknown as ParsedShiftEvent);
+      else if (m.target === "weeks") out.weeks!.push(rec as unknown as ParsedWeek);
+      else if (m.target === "employees") out.employees!.push(rec as unknown as ParsedEmployee);
+      else if (m.target === "jobSites") out.jobSites!.push(rec as unknown as ParsedJobSite);
+      else if (m.target === "timeOff") out.timeOff!.push(rec as unknown as ParsedTimeOff);
       else out.bookings.push(rec as unknown as ParsedBooking);
     }
   }
@@ -358,7 +473,10 @@ export async function parseImportFile(filename: string, buf: Buffer, mime: strin
 export async function createImportBatch(filename: string, buf: Buffer, mime: string) {
   try {
     const parsed = await parseImportFile(filename, buf, mime);
-    const empty = !parsed.days.length && !parsed.labor.length && !parsed.bookings.length && !parsed.shifts?.length && !parsed.shiftEvents?.length;
+    const empty =
+      !parsed.days.length && !parsed.labor.length && !parsed.bookings.length && !parsed.shifts?.length &&
+      !parsed.shiftEvents?.length && !parsed.weeks?.length && !parsed.employees?.length &&
+      !parsed.jobSites?.length && !parsed.timeOff?.length;
     return prisma.importBatch.create({
       data: {
         filename,
@@ -368,7 +486,7 @@ export async function createImportBatch(filename: string, buf: Buffer, mime: str
         parsed: parsed as unknown as object,
         error: empty
           ? parsed.kind === "unsupported"
-            ? "This file type isn't importable (weekly comps/projections are seeded, not imported)."
+            ? "This file type isn't importable."
             : "No recognizable rows found in the file."
           : null,
       },
@@ -443,30 +561,37 @@ export async function commitImportBatch(id: number): Promise<{ ok: boolean; rows
 
   // Scheduled shifts: replace-then-insert per date so a re-exported week
   // (schedules change daily as Kevin adjusts staffing) fully supersedes the
-  // old one instead of stacking duplicates.
+  // old one instead of stacking duplicates. The WIW schedule export carries
+  // no rate column, so cost falls back to the roster's base hourly rate.
   const shifts = parsed.shifts ?? [];
   if (shifts.length) {
+    const empIds = [...new Set(shifts.map((s) => s.employeeId).filter(Boolean))] as string[];
+    const roster = empIds.length ? await prisma.employee.findMany({ where: { employeeId: { in: empIds } } }) : [];
+    const baseRate = new Map(roster.filter((e) => e.employeeId && e.baseRate != null).map((e) => [e.employeeId!, Number(e.baseRate)]));
     const dates = [...new Set(shifts.map((s) => s.date))];
     await prisma.scheduledShift.deleteMany({
       where: { date: { in: dates.map((d) => new Date(`${d}T00:00:00Z`)) } },
     });
     await prisma.scheduledShift.createMany({
-      data: shifts.map((s) => ({
-        date: new Date(`${s.date}T00:00:00Z`),
-        department: s.department ?? null,
-        position: s.position ?? null,
-        employeeId: s.employeeId ?? null,
-        firstName: s.firstName ?? null,
-        lastName: s.lastName ?? null,
-        startTime: s.startTime ?? null,
-        endTime: s.endTime ?? null,
-        unpaidBreak: s.unpaidBreak ?? null,
-        hours: s.scheduledHours ?? null,
-        hourlyRate: s.hourlyRate ?? null,
-        laborCost: s.laborCost ?? (s.scheduledHours != null && s.hourlyRate != null ? s.scheduledHours * s.hourlyRate : null),
-        status: s.status ?? null,
-        source: "WHENIWORK",
-      })),
+      data: shifts.map((s) => {
+        const rate = s.hourlyRate ?? (s.employeeId ? baseRate.get(s.employeeId) ?? null : null);
+        return {
+          date: new Date(`${s.date}T00:00:00Z`),
+          department: s.department ?? null,
+          position: s.position ?? null,
+          employeeId: s.employeeId ?? null,
+          firstName: s.firstName ?? null,
+          lastName: s.lastName ?? null,
+          startTime: s.startTime ?? null,
+          endTime: s.endTime ?? null,
+          unpaidBreak: s.unpaidBreak ?? null,
+          hours: s.scheduledHours ?? null,
+          hourlyRate: rate,
+          laborCost: s.laborCost ?? (s.scheduledHours != null && rate != null ? s.scheduledHours * rate : null),
+          status: s.status ?? null,
+          source: "WHENIWORK",
+        };
+      }),
     });
     rows += shifts.length;
   }
@@ -502,6 +627,77 @@ export async function commitImportBatch(id: number): Promise<{ ok: boolean; rows
       })),
     });
     rows += shiftEvents.length;
+  }
+
+  // Weekly comp: upsert by weekStart, touching ONLY the fields this file
+  // carries — projections and prior-prior-year columns keep their values.
+  for (const w of parsed.weeks ?? []) {
+    const fields = {
+      ...(w.weekEnd ? { weekEnd: new Date(`${w.weekEnd}T00:00:00Z`) } : {}),
+      ...(w.revenue != null ? { totalRevenue: w.revenue } : {}),
+      ...(w.revenuePrev1 != null ? { revenuePrev1: w.revenuePrev1 } : {}),
+      ...(w.laborCost != null ? { laborCost: w.laborCost } : {}),
+      ...(w.laborPct != null ? { laborPct: w.laborPct } : {}),
+    };
+    if (!Object.keys(fields).length) continue;
+    await prisma.weeklyRollup.upsert({
+      where: { weekStart: new Date(`${w.weekStart}T00:00:00Z`) },
+      create: { weekStart: new Date(`${w.weekStart}T00:00:00Z`), ...fields },
+      update: fields,
+    });
+    rows++;
+  }
+
+  // Roster: upsert on the stable WIW user id — no delete, so a partial
+  // export never wipes employees.
+  for (const e of parsed.employees ?? []) {
+    const fields = {
+      employeeId: e.employeeId ?? null,
+      firstName: e.firstName ?? null,
+      lastName: e.lastName ?? null,
+      email: e.email ?? null,
+      phone: e.phone ?? null,
+      schedules: e.schedules ?? null,
+      positions: e.positions ?? null,
+      tags: e.tags ?? null,
+      baseRate: e.baseRate ?? null,
+      maxHours: e.maxHours ?? null,
+      notes: e.notes ?? null,
+    };
+    await prisma.employee.upsert({ where: { wiwUserId: e.wiwUserId }, create: { wiwUserId: e.wiwUserId, ...fields }, update: fields });
+    rows++;
+  }
+
+  // Job sites: upsert by name.
+  for (const j of parsed.jobSites ?? []) {
+    const fields = { address: j.address ?? null, description: j.description ?? null, schedules: j.schedules ?? null };
+    await prisma.jobSite.upsert({ where: { name: j.name }, create: { name: j.name, ...fields }, update: fields });
+    rows++;
+  }
+
+  // Time off: the export is a forward window — replace the covered
+  // startDate range so cancelled requests disappear on re-import.
+  const timeOff = parsed.timeOff ?? [];
+  if (timeOff.length) {
+    const starts = timeOff.map((t) => t.startDate).sort();
+    await prisma.timeOffRequest.deleteMany({
+      where: { startDate: { gte: new Date(`${starts[0]}T00:00:00Z`), lte: new Date(`${starts[starts.length - 1]}T00:00:00Z`) } },
+    });
+    await prisma.timeOffRequest.createMany({
+      data: timeOff.map((t) => ({
+        startDate: new Date(`${t.startDate}T00:00:00Z`),
+        endDate: t.endDate ? new Date(`${t.endDate}T00:00:00Z`) : null,
+        name: t.name ?? null,
+        employeeId: t.employeeId ?? null,
+        email: t.email ?? null,
+        type: t.type ?? null,
+        status: t.status ?? null,
+        requestedAt: t.requestedAt ? new Date(`${t.requestedAt}T00:00:00Z`) : null,
+        paidHours: t.paidHours ?? null,
+        unpaidHours: t.unpaidHours ?? null,
+      })),
+    });
+    rows += timeOff.length;
   }
 
   // Bookings: upsert on (eventDate, name).

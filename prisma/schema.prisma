@@ -383,3 +383,56 @@ model UserLayout {
 
   @@unique([userId, tab])
 }
+
+/// When I Work user roster ("Users as of <date>" export). Includes venue
+/// placeholder users (tag "Venue") — filter those out for real-staff views.
+/// baseRate feeds scheduled-shift labor cost when the schedule export
+/// carries no rate (it never does).
+model Employee {
+  id         Int      @id @default(autoincrement())
+  wiwUserId  String   @unique // "WIW User ID (DO NOT MODIFY)" — stable upsert key
+  employeeId String? // WIW "Employee ID" — blank for venue placeholders
+  firstName  String?
+  lastName   String?
+  email      String?
+  phone      String?
+  schedules  String? // comma list of WIW schedules (departments)
+  positions  String?
+  tags       String?
+  baseRate   Decimal? @db.Decimal(8, 2)
+  maxHours   Decimal? @db.Decimal(6, 2)
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+/// When I Work job sites ("Job Sites as of <date>" export) — the venue
+/// address book. Future use: geocoding event/delivery locations by name.
+model JobSite {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  address     String?
+  description String?
+  schedules   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// When I Work time-off requests (forward window export). Re-imports replace
+/// the covered startDate range, so cancelled requests disappear.
+model TimeOffRequest {
+  id          Int       @id @default(autoincrement())
+  name        String?
+  employeeId  String?
+  email       String?
+  type        String? // Personal | Sick | ...
+  status      String? // Approved | Pending | Denied | Canceled
+  requestedAt DateTime? // "Created At" in the export
+  startDate   DateTime  @db.Date
+  endDate     DateTime? @db.Date
+  paidHours   Decimal?  @db.Decimal(6, 2)
+  unpaidHours Decimal?  @db.Decimal(6, 2)
+  createdAt   DateTime  @default(now())
+
+  @@index([startDate])
+}
