@@ -50,6 +50,7 @@ export const LABOR_CARDS: CardMeta[] = [
   { id: "labor-comparisons", title: "Labor MoM & YoY", description: "Cost and % of revenue vs prior month and year", defaultSpan: 2 },
   { id: "dept-detail", title: "Latest Week by Department", description: "Department filter and per-department table", defaultSpan: 1 },
   { id: "employee-table", title: "Employee Table", description: "Per-employee hours and cost for the latest week", defaultSpan: 2 },
+  { id: "time-off", title: "Upcoming Time Off", description: "Approved When I Work time-off requests on the horizon", defaultSpan: 1 },
 ];
 
 export const BOOKINGS_CARDS: CardMeta[] = [

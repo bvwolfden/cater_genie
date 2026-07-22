@@ -19,6 +19,10 @@ type Batch = {
     bookings?: Record<string, unknown>[];
     shifts?: Record<string, unknown>[];
     shiftEvents?: Record<string, unknown>[];
+    weeks?: Record<string, unknown>[];
+    employees?: Record<string, unknown>[];
+    jobSites?: Record<string, unknown>[];
+    timeOff?: Record<string, unknown>[];
   } | null;
 };
 
@@ -80,6 +84,10 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
   const bookings = p.bookings ?? [];
   const shifts = p.shifts ?? [];
   const shiftEvents = p.shiftEvents ?? [];
+  const weeks = p.weeks ?? [];
+  const employees = p.employees ?? [];
+  const jobSites = p.jobSites ?? [];
+  const timeOff = p.timeOff ?? [];
 
   return (
     <div className="card overflow-hidden">
@@ -183,6 +191,65 @@ function BatchCard({ batch, onAction, busy }: { batch: Batch; onAction: (id: num
                   { key: "status", label: "Status" },
                   { key: "guests", label: "Guests" },
                   { key: "revenue", label: "Revenue", money: true },
+                ]}
+              />
+            </div>
+          )}
+          {weeks.length > 0 && (
+            <div className="mb-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Weekly comp rows · {weeks.length}</div>
+              <PreviewTable
+                rows={weeks}
+                cols={[
+                  { key: "week", label: "Week" },
+                  { key: "revenue", label: "Revenue", money: true },
+                  { key: "revenuePrev1", label: "Prior yr", money: true },
+                  { key: "laborCost", label: "Labor $", money: true },
+                ]}
+              />
+            </div>
+          )}
+          {employees.length > 0 && (
+            <div className="mb-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Roster · {employees.length}</div>
+              <PreviewTable
+                rows={employees}
+                cols={[
+                  { key: "firstName", label: "First" },
+                  { key: "lastName", label: "Last" },
+                  { key: "employeeId", label: "Emp ID" },
+                  { key: "schedules", label: "Schedules" },
+                  { key: "positions", label: "Positions" },
+                  { key: "baseRate", label: "Base rate", money: true },
+                ]}
+              />
+            </div>
+          )}
+          {jobSites.length > 0 && (
+            <div className="mb-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Job sites · {jobSites.length}</div>
+              <PreviewTable
+                rows={jobSites}
+                cols={[
+                  { key: "name", label: "Name" },
+                  { key: "address", label: "Address" },
+                  { key: "schedules", label: "Schedules" },
+                ]}
+              />
+            </div>
+          )}
+          {timeOff.length > 0 && (
+            <div className="mb-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Time-off requests · {timeOff.length}</div>
+              <PreviewTable
+                rows={timeOff}
+                cols={[
+                  { key: "name", label: "Who" },
+                  { key: "type", label: "Type" },
+                  { key: "startDate", label: "From" },
+                  { key: "endDate", label: "Through" },
+                  { key: "unpaidHours", label: "Unpaid h" },
+                  { key: "paidHours", label: "Paid h" },
                 ]}
               />
             </div>
